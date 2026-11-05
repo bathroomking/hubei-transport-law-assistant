@@ -16,29 +16,51 @@
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
     <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L11 13m-1-9H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-5"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Zm0 0v6h6M8 13h8m-8 4h5"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 8a8 8 0 0 0-14-3L3 8m0-6v6h6m-5 8a8 8 0 0 0 14 3l3-3m0 6v-6h-6"/></symbol>
   </svg>
   <a class="skip-link" href="#main-content">跳转到主要内容</a>
   <header class="site-header">
     <a class="brand" href="/" aria-label="湖北交通法规助手首页"><img src="/static/favicon.svg" alt="" width="36" height="36"><span>湖北交通<span class="brand-detail">法规助手</span></span></a>
-    <button id="refresh-health" class="service-status" type="button" title="刷新服务状态"><span id="service-dot" class="status-dot pending" aria-hidden="true"></span><span id="service-label" role="status">正在连接</span></button>
+    <div class="header-actions"><nav class="page-nav" aria-label="工作台导航"><a href="#ask" data-view="ask" aria-current="page">在线问答</a><a href="#knowledge" data-view="knowledge">上传资料</a></nav><button id="refresh-health" class="service-status" type="button" title="刷新服务状态"><span id="service-dot" class="status-dot pending" aria-hidden="true"></span><span id="service-label" role="status">正在连接</span></button></div>
   </header>
   <main id="main-content" tabindex="-1">
-    <noscript><div class="notice error">请启用 JavaScript 后使用在线问答。</div></noscript>
+    <noscript><div class="notice error">请启用 JavaScript 后使用问答和资料上传。</div></noscript>
+    <section id="view-ask" aria-labelledby="page-title">
     <section class="intro" aria-labelledby="page-title">
       <span class="eyebrow">交通法规 · 处理依据 · 裁量参考</span>
       <h1 id="page-title">有交通法规问题？<br><span>直接说说你的情况。</span></h1>
-      <p>用自己的话提问，回答与出处一起看。</p>
+      <p>统一查找已收录法规与已入库资料，回答与出处一起看。</p>
     </section>
     <form id="ask-form" class="question-card">
-      <label for="ask-question">你想了解什么？</label>
+      <div class="question-heading"><label for="ask-question">你想了解什么？</label><a href="#knowledge" class="text-link"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg>补充自己的资料</a></div>
       <textarea id="ask-question" name="question" rows="4" minlength="2" maxlength="2000" required placeholder="例如：在湖北一段普通公路上，施工队没办许可就挖沟埋管。这种情况该怎么处理，有什么依据？" aria-describedby="ask-hint ask-count"></textarea>
       <div class="question-toolbar"><span id="ask-count" class="char-count">0 / 2000</span><div class="submit-group"><span class="keyboard-hint">Ctrl / ⌘ + Enter</span><button id="send-question" type="submit" class="button primary"><span>发送问题</span><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div></div>
       <div class="examples" aria-label="提问示例"><span>试着问</span><button type="button" data-example="在湖北一段普通公路上，施工队没办许可就挖沟埋管。这种情况该怎么处理，有什么依据？">公路上挖沟，怎么办？</button><button type="button" data-example="占用公路施工需要办什么手续？请给我相关规定和原文。">占道施工需要哪些手续？</button><button type="button" data-example="在湖北普通公路上未经许可占道施工，想了解处罚和裁量依据，还需要核实哪些情况？">处罚前还要核实什么？</button></div>
     </form>
-    <p id="ask-hint" class="input-hint">每次提问独立处理。补充情况时，请把原有背景和新增信息写在同一个问题里。</p>
+    <p id="ask-hint" class="input-hint">每次提问独立处理。补充情况时，请把原有背景和新增信息写在同一个问题里。问题会用于在线检索，并与命中资料一同交给 DeepSeek 回答。</p>
     <div id="ask-results" class="results" role="region" aria-label="回答与依据" aria-live="polite" aria-busy="false">
       <div class="empty-state"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg><p>发送后，这里会显示在线回答、需要补充的信息和引用原文。</p></div>
     </div>
+    </section>
+    <section id="view-knowledge" aria-labelledby="knowledge-title" hidden>
+      <div class="intro library-intro"><span class="eyebrow">补充资料 · 自动入库 · 统一问答</span><h1 id="knowledge-title">把需要参考的资料<br><span>加入问答资料库。</span></h1><p>上传后自动提取和整理文字，入库完成即可参与下一次提问。</p></div>
+      <form id="upload-form" class="upload-card" enctype="multipart/form-data">
+        <div id="drop-zone" class="drop-zone"><span class="upload-emblem"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg></span><h2>拖拽一份资料到这里</h2><p id="file-types">PDF、TXT、Markdown · <span id="upload-limit">正在读取文件大小限制</span></p><label class="button secondary file-picker">选择文件<input id="upload-file" name="file" type="file" accept=".pdf,.txt,.md,.markdown" class="visually-hidden" aria-label="选择资料文件" aria-describedby="file-types upload-note"></label></div>
+        <div id="selected-file" class="selected-file" hidden><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg><div><strong id="selected-filename"></strong><span id="selected-size"></span></div><button id="clear-file" class="icon-button" type="button" aria-label="移除待上传文件"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+        <div class="upload-toolbar"><p>一次上传一份资料；同名文件不会覆盖。</p><button id="submit-upload" type="submit" class="button primary" disabled><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg><span>上传并入库</span></button></div>
+        <p id="upload-note" class="upload-note">入库会将文档文字发送至阿里云百炼生成向量，并使用 API 额度。TXT / Markdown 请使用 UTF-8 编码；扫描版 PDF 需先识别为可提取文字的文档。</p>
+      </form>
+      <div id="upload-feedback" class="upload-feedback" role="status" aria-live="polite" hidden></div>
+      <section class="library-section" aria-labelledby="library-title">
+        <div class="results-heading"><div><h2 id="library-title">我的上传资料</h2><p id="library-summary" class="library-summary">正在读取资料记录…</p></div><button id="refresh-documents" class="button secondary" type="button"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg><span>刷新列表</span></button></div>
+        <p id="library-update" class="library-update" role="status"></p>
+        <div id="library-error" role="alert" hidden></div>
+        <div id="document-list" class="document-list" role="region" aria-label="上传资料列表" aria-busy="false"><p class="empty-state">正在读取资料记录…</p></div>
+        <p class="library-footnote">只有“已入库”的资料会参与问答。上传记录会保存，刷新页面后仍可查看；入库完成不代表资料效力或个案适用已核验。</p>
+      </section>
+    </section>
     <footer class="page-footer">依据已收录资料回答 · 引用可查看原文与出处 · 个案适用需核实</footer>
   </main>
   <dialog id="detail-dialog" aria-labelledby="dialog-title"><div class="dialog-header"><span id="dialog-kicker" class="eyebrow">原文与出处</span><button type="button" id="close-dialog" class="icon-button" aria-label="关闭原文" autofocus><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></div><div id="dialog-content"></div></dialog>

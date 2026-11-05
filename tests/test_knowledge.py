@@ -232,6 +232,8 @@ def test_size_limit_does_not_reserve_filename(upload_setup):
     settings, embedder = upload_setup
     settings = settings.model_copy(update={"upload_max_bytes": 8})
     with TestClient(create_app(settings)) as client:
+        # The frontend must display and validate the same configured limit as receive().
+        assert client.get("/health").json()["upload_max_bytes"] == 8
         too_large = client.post(f"{BASE}/documents", files={"file": ("small.txt", b"a" * 9)})
         assert too_large.status_code == 413
         assert client.get(f"{BASE}/documents").json() == []

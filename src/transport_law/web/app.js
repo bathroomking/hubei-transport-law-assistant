@@ -16,6 +16,7 @@
   let questionController;
   let dialogController;
   let healthLoading = false;
+  let activeView = "ask";
 
   // API responses and model output are always text, never executable markup.
   function el(tag, className, text) {
@@ -46,19 +47,20 @@
     return el("p", "notice", text);
   }
 
-  async function request(path, { body, signal } = {}) {
+  async function request(path, { body, signal, method = body === undefined ? "GET" : "POST" } = {}) {
     const controller = new AbortController();
     const forwardAbort = () => controller.abort();
     if (signal?.aborted) controller.abort();
     signal?.addEventListener("abort", forwardAbort, { once: true });
-    const timeout = setTimeout(() => controller.abort(), body === undefined ? 20000 : 610000);
+    const timeout = setTimeout(() => controller.abort(), path === "/api/v1/ask" ? 610000 : method === "GET" ? 20000 : 120000);
+    const multipart = body instanceof FormData;
     try {
       const response = await fetch(path, {
-        method: body === undefined ? "GET" : "POST",
-        headers: body === undefined ? { Accept: "application/json" } : {
+        method,
+        headers: body === undefined || multipart ? { Accept: "application/json" } : {
           Accept: "application/json", "Content-Type": "application/json",
         },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: body === undefined ? undefined : multipart ? body : JSON.stringify(body),
         credentials: "same-origin",
         signal: controller.signal,
       });
@@ -71,15 +73,18 @@
       }
       if (!response.ok) {
         let message = data.error?.message;
-        if (!message && Array.isArray(data.detail)) message = "请检查问题长度，输入 2 至 2000 个字符后重试。";
+        if (!message && Array.isArray(data.detail)) {
+          message = path === "/api/v1/ask" ? "请检查问题长度，输入 2 至 2000 个字符后重试。" : "请检查上传文件和请求格式后重试。";
+        }
         const error = new Error(message || `请求失败（${response.status}），请稍后重试。`);
         error.code = data.error?.code;
+        error.status = response.status;
         throw error;
       }
       return data;
     } catch (error) {
       if (signal?.aborted) throw new DOMException("已取消等待", "AbortError");
-      if (controller.signal.aborted) throw new Error("等待服务响应超时，请稍后重新发送。");
+      if (controller.signal.aborted) throw new Error("等待服务响应超时，请稍后重试。");
       if (error instanceof TypeError) throw new Error("暂时无法连接服务，请检查连接后重试。");
       throw error;
     } finally {
@@ -329,7 +334,8 @@
   }
 
   function openDocument(chunk) {
-    const path = `/api/v1/documents/${encodeURIComponent(chunk.document_id)}?version_id=${encodeURIComponent(chunk.version_id)}`;
+    const version = chunk.version_id ? `?version_id=${encodeURIComponent(chunk.version_id)}` : "";
+    const path = `/api/v1/documents/${encodeURIComponent(chunk.document_id)}${version}`;
     return showDetail("已收录原文", (signal) => request(path, { signal }), (target, data) => {
       const title = el("h2", "", data.title);
       title.id = "dialog-title";
@@ -362,6 +368,295 @@
     if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close();
   });
 
+  const knowledgePath = "/api/v1/knowledge/documents";
+  const uploadForm = $("#upload-form");
+  const fileInput = $("#upload-file");
+  const documentList = $("#document-list");
+  const retrying = new Set();
+  const statusNames = { queued: "等待处理", processing: "正在入库", ready: "已入库", failed: "入库失败" };
+  let selectedFile;
+  let uploadMaxBytes;
+  let uploadBusy = false;
+  let documents = [];
+  let libraryLoaded = false;
+  let libraryController;
+  let pollTimer;
+  let renderedDocuments;
+
+  function formatSize(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    const unit = bytes < 1024 * 1024 ? 1024 : 1024 * 1024;
+    return `${Number((bytes / unit).toFixed(2))} ${unit === 1024 ? "KiB" : "MiB"}`;
+  }
+
+  function fileError(file) {
+    if (!file) return "请先选择一份资料。";
+    if (!/\.(pdf|txt|md|markdown)$/i.test(file.name.normalize("NFKC").trim())) return "请选择 PDF、TXT 或 Markdown 文件。";
+    if (!file.size) return "不能上传空文件，请选择有内容的资料。";
+    if (uploadMaxBytes && file.size > uploadMaxBytes) return `文件超过当前 ${formatSize(uploadMaxBytes)} 的上传上限，请选择更小的文件。`;
+    return "";
+  }
+
+  function uploadFeedback(text, error = false) {
+    const target = $("#upload-feedback");
+    target.hidden = !text;
+    target.replaceChildren(notice(text));
+    $("p", target).classList.toggle("error", error);
+  }
+
+  function syncUploadControls() {
+    const selected = $("#selected-file");
+    selected.hidden = !selectedFile;
+    $("#selected-filename").textContent = selectedFile?.name || "";
+    $("#selected-size").textContent = selectedFile ? formatSize(selectedFile.size) : "";
+    fileInput.disabled = uploadBusy;
+    $("#clear-file").disabled = uploadBusy;
+    $("#submit-upload").disabled = uploadBusy || Boolean(fileError(selectedFile));
+    $("#submit-upload span").textContent = uploadBusy ? "正在上传…" : "上传并入库";
+    uploadForm.setAttribute("aria-busy", String(uploadBusy));
+    $("#drop-zone").classList.toggle("is-busy", uploadBusy);
+  }
+
+  function chooseFile(file) {
+    if (uploadBusy) return;
+    selectedFile = file;
+    if (!file) fileInput.value = "";
+    const error = file ? fileError(file) : "";
+    uploadFeedback(error, Boolean(error));
+    syncUploadControls();
+  }
+
+  function isPending(record) {
+    return record.status === "queued" || record.status === "processing";
+  }
+
+  function cancelLibraryRead() {
+    clearTimeout(pollTimer);
+    libraryController?.abort();
+  }
+
+  function schedulePoll() {
+    clearTimeout(pollTimer);
+    if (activeView === "knowledge" && !document.hidden && documents.some(isPending)) {
+      pollTimer = setTimeout(() => loadDocuments(true), 3000);
+    }
+  }
+
+  function upsertDocument(record) {
+    const index = documents.findIndex((item) => item.id === record.id);
+    if (index < 0) documents.unshift(record);
+    else documents[index] = record;
+  }
+
+  function rowAction(label, record, action, callback) {
+    const control = button(label, "text-button", callback);
+    control.dataset.documentId = record.id;
+    control.dataset.libraryAction = action;
+    return control;
+  }
+
+  function renderDocuments() {
+    const ready = documents.filter((record) => record.status === "ready").length;
+    const pending = documents.filter(isPending).length;
+    const failed = documents.filter((record) => record.status === "failed").length;
+    $("#library-summary").textContent = `共 ${documents.length} 份 · 已入库 ${ready} 份 · 待完成 ${pending} 份 · 失败 ${failed} 份`;
+    // Leave unchanged rows in place during polling, preserving keyboard focus.
+    const signature = JSON.stringify([documents, [...retrying]]);
+    if (signature === renderedDocuments) return;
+    renderedDocuments = signature;
+    const focused = documentList.contains(document.activeElement) ? { ...document.activeElement.dataset } : null;
+    documentList.replaceChildren();
+    if (!documents.length) {
+      const empty = el("div", "library-empty");
+      empty.append(icon("book"), el("h3", "", "还没有上传资料"), el("p", "", "选择一份资料开始，处理进度会显示在这里。"));
+      documentList.append(empty);
+    }
+    for (const record of documents) {
+      const card = el("article", "upload-item");
+      const heading = el("div", "upload-item-heading");
+      const title = el("div", "upload-item-title");
+      title.append(icon("file"), el("h3", "", record.filename));
+      heading.append(title, el("span", `document-status ${record.status}`, statusNames[record.status] || "状态未知"));
+      card.append(heading);
+      let progressText;
+      if (record.status === "ready") progressText = `${record.chunk_count} 个片段已入库，可参与下一次提问。`;
+      else if (record.chunk_count > 0) progressText = `已入库 ${record.embedded_count} / ${record.chunk_count} 个片段${record.status === "failed" ? "，重试会继续未完成的部分。" : "。"}`;
+      else progressText = record.status === "queued" ? "已接收文件，等待后台处理。" : record.status === "processing" ? "正在提取与整理文字…" : "资料尚未完成入库。";
+      card.append(el("p", "upload-progress-text", progressText));
+      if (isPending(record)) {
+        const progress = el("progress", "upload-progress");
+        progress.setAttribute("aria-label", `${record.filename}的入库进度`);
+        if (record.chunk_count > 0) {
+          progress.max = record.chunk_count;
+          progress.value = Math.min(record.embedded_count, record.chunk_count);
+        }
+        card.append(progress);
+      }
+      if (record.status === "failed") {
+        const error = el("p", "document-error", record.error_message || "资料处理失败，请检查文件与服务配置后重试。");
+        card.append(error);
+      }
+      const actions = el("div", "source-actions");
+      if (record.status === "ready") {
+        actions.append(rowAction("查看入库原文", record, "read", () => openDocument({ document_id: record.id })));
+        const ask = el("a", "text-link", "去问答");
+        ask.href = "#ask";
+        ask.append(icon("arrow"));
+        actions.append(ask);
+      } else if (record.status === "failed" || record.status === "queued") {
+        const control = rowAction(retrying.has(record.id) ? "正在提交…" : record.status === "failed" ? "重试入库" : "继续入库", record, "retry", () => retryDocument(record));
+        control.disabled = retrying.has(record.id);
+        if (record.status === "queued") control.title = "任务长时间等待时可尝试继续；正在执行的任务不会重复启动。";
+        actions.append(control);
+      }
+      if (actions.childElementCount) card.append(actions);
+      documentList.append(card);
+    }
+    if (focused?.libraryAction) {
+      const replacement = $$("[data-library-action]", documentList).find((control) =>
+        control.dataset.libraryAction === focused.libraryAction && control.dataset.documentId === focused.documentId);
+      replacement?.focus({ preventScroll: true });
+    }
+  }
+
+  function libraryError(error) {
+    const target = $("#library-error");
+    target.hidden = false;
+    target.replaceChildren(el("p", "notice error", `${error.message} 自动更新已暂停，请点击“刷新列表”重试。`));
+    $("#library-update").textContent = libraryLoaded ? "以下为上次读取的状态。" : "尚未读取到资料记录。";
+    if (!libraryLoaded) {
+      $("#library-summary").textContent = "资料数量暂不可用";
+      documentList.replaceChildren(el("p", "empty-state", "暂时无法读取上传资料。"));
+    }
+  }
+
+  async function loadDocuments(poll = false) {
+    cancelLibraryRead();
+    const controller = new AbortController();
+    libraryController = controller;
+    $("#refresh-documents").disabled = true;
+    documentList.setAttribute("aria-busy", "true");
+    $("#library-error").hidden = true;
+    try {
+      let pollError;
+      if (poll) {
+        const pending = documents.filter(isPending);
+        const updates = await Promise.allSettled(pending.map((record) => request(`${knowledgePath}/${encodeURIComponent(record.id)}`, { signal: controller.signal })));
+        if (controller.signal.aborted) return;
+        for (const result of updates) {
+          if (result.status === "fulfilled") upsertDocument(result.value);
+          else pollError ||= result.reason;
+        }
+      } else {
+        const records = await request(knowledgePath, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        if (!Array.isArray(records)) throw new Error("无法读取资料列表，请确认服务响应格式。");
+        documents = records;
+      }
+      libraryLoaded = true;
+      renderDocuments();
+      const pending = documents.filter(isPending).length;
+      $("#library-update").textContent = pending ? `${pending} 份资料正在等待或处理中，每 3 秒更新进度。` : "已更新；已入库的资料可直接用于问答。";
+      if (pollError) libraryError(pollError);
+      else schedulePoll();
+    } catch (error) {
+      if (!controller.signal.aborted) libraryError(error);
+    } finally {
+      if (libraryController === controller) {
+        libraryController = undefined;
+        $("#refresh-documents").disabled = false;
+        documentList.setAttribute("aria-busy", "false");
+      }
+    }
+  }
+
+  fileInput.addEventListener("change", () => chooseFile(fileInput.files[0]));
+  $("#clear-file").addEventListener("click", () => { chooseFile(undefined); fileInput.focus(); });
+  const dropZone = $("#drop-zone");
+  let dragDepth = 0;
+  dropZone.addEventListener("dragenter", (event) => {
+    event.preventDefault();
+    if (!uploadBusy) { dragDepth += 1; dropZone.classList.add("drag-over"); }
+  });
+  dropZone.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = uploadBusy ? "none" : "copy";
+  });
+  dropZone.addEventListener("dragleave", (event) => {
+    event.preventDefault();
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) dropZone.classList.remove("drag-over");
+  });
+  dropZone.addEventListener("drop", (event) => {
+    event.preventDefault();
+    dragDepth = 0;
+    dropZone.classList.remove("drag-over");
+    if (uploadBusy) return;
+    if (event.dataTransfer.files.length !== 1) {
+      chooseFile(undefined);
+      uploadFeedback("请一次选择一份文件上传。", true);
+      return;
+    }
+    fileInput.value = "";
+    chooseFile(event.dataTransfer.files[0]);
+  });
+
+  uploadForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (uploadBusy) return;
+    const error = fileError(selectedFile);
+    if (error) { uploadFeedback(error, true); return; }
+    const payload = new FormData();
+    payload.append("file", selectedFile);
+    uploadBusy = true;
+    syncUploadControls();
+    uploadFeedback("正在上传文件，请稍候…");
+    try {
+      const record = await request(knowledgePath, { body: payload });
+      cancelLibraryRead();
+      upsertDocument(record);
+      libraryLoaded = true;
+      renderDocuments();
+      selectedFile = undefined;
+      fileInput.value = "";
+      uploadFeedback(`已接收“${record.filename}”，后台正在安排入库。请以下方处理状态为准，只有“已入库”时才可用于问答。`);
+    } catch (error) {
+      const detail = error.code === "duplicate_filename"
+        ? " 可在列表中检查已有任务；失败任务请使用“重试入库”。"
+        : !error.status ? " 上传结果尚未确认，请先刷新列表检查是否已接收，再决定是否重新上传。" : "";
+      uploadFeedback(error.message + detail, true);
+    } finally {
+      uploadBusy = false;
+      syncUploadControls();
+      if (activeView === "knowledge" && !document.hidden) loadDocuments();
+    }
+  });
+
+  async function retryDocument(record) {
+    if (retrying.has(record.id)) return;
+    cancelLibraryRead();
+    retrying.add(record.id);
+    renderDocuments();
+    try {
+      const updated = await request(`${knowledgePath}/${encodeURIComponent(record.id)}/retry`, { method: "POST" });
+      upsertDocument(updated);
+      uploadFeedback(`“${record.filename}”已重新安排入库，处理结果将显示在列表中。`);
+    } catch (error) {
+      uploadFeedback(error.message + (!error.status ? " 重试结果尚未确认，请刷新列表查看状态。" : ""), true);
+    } finally {
+      retrying.delete(record.id);
+      renderDocuments();
+      if (activeView === "knowledge" && !document.hidden) loadDocuments();
+    }
+  }
+
+  $("#refresh-documents").addEventListener("click", () => loadDocuments());
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) cancelLibraryRead();
+    else if (activeView === "knowledge") loadDocuments();
+  });
+  window.addEventListener("pagehide", cancelLibraryRead);
+
   async function refreshHealth() {
     if (healthLoading) return;
     healthLoading = true;
@@ -369,11 +664,20 @@
     control.disabled = true;
     try {
       const data = await request("/health");
+      if (Number.isSafeInteger(data.upload_max_bytes) && data.upload_max_bytes > 0) {
+        uploadMaxBytes = data.upload_max_bytes;
+        $("#upload-limit").textContent = `单文件最大 ${formatSize(uploadMaxBytes)}`;
+        if (selectedFile && fileError(selectedFile)) uploadFeedback(fileError(selectedFile), true);
+        syncUploadControls();
+      } else {
+        $("#upload-limit").textContent = "大小限制由服务检查";
+      }
       const configured = data.llm_configured === true && data.embedding_configured === true;
       $("#service-label").textContent = configured ? "在线配置已就绪" : "问答待配置";
       $("#service-dot").className = `status-dot${configured ? "" : " unavailable"}`;
       control.title = configured ? "服务可访问，两项在线配置已就绪；模型连接将在提问时检查。点击刷新状态。" : "服务可访问，在线问答所需配置尚未完成；模型连接将在提问时检查。点击刷新状态。";
     } catch {
+      $("#upload-limit").textContent = uploadMaxBytes ? `单文件最大 ${formatSize(uploadMaxBytes)}` : "暂未读取到大小限制";
       $("#service-label").textContent = "服务未连接";
       $("#service-dot").className = "status-dot unavailable";
       control.title = "暂时无法连接服务，点击重试。";
@@ -383,6 +687,32 @@
     }
   }
 
+  function switchView(focus = false) {
+    if (location.hash === "#main-content") return;
+    activeView = location.hash === "#knowledge" ? "knowledge" : "ask";
+    $("#view-ask").hidden = activeView !== "ask";
+    $("#view-knowledge").hidden = activeView !== "knowledge";
+    $$("[data-view]").forEach((link) => {
+      if (link.dataset.view === activeView) link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
+    });
+    document.title = `${activeView === "ask" ? "在线问答" : "上传资料"} · 湖北交通法规助手`;
+    if (activeView === "knowledge") loadDocuments();
+    else cancelLibraryRead();
+    if (focus) {
+      const heading = $(activeView === "ask" ? "#page-title" : "#knowledge-title");
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+      window.scrollTo({ top: 0 });
+    }
+  }
+
   $("#refresh-health").addEventListener("click", refreshHealth);
+  window.addEventListener("hashchange", () => switchView(true));
+  $(".skip-link").addEventListener("click", (event) => {
+    event.preventDefault();
+    $("#main-content").focus();
+  });
+  switchView();
   refreshHealth();
 })();

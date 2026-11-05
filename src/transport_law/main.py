@@ -77,6 +77,7 @@ def create_app(
             "embedding_configured": runtime.settings.embedding_configured,
             "embedding_model": runtime.settings.embedding_model,
             "embedding_connectivity": "not_checked",
+            "upload_max_bytes": runtime.settings.upload_max_bytes,
         }
 
     @app.get("/api/v1/articles/{chunk_id}", response_model=LegalChunk, tags=["出处原文"])

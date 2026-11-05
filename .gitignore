@@ -192,8 +192,6 @@ cython_debug/
 .idea/
 .env.*
 !.env.example
-data/staging/*
-!data/staging/.gitkeep
 data/local/
 output/
 

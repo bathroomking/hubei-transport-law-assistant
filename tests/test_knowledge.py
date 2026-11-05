@@ -2,7 +2,6 @@ import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-from pathlib import Path
 from threading import Barrier, Event
 
 import pytest
@@ -13,7 +12,6 @@ from transport_law.errors import AppError
 from transport_law.hybrid import HybridRetriever
 from transport_law.llm import Completion
 from transport_law.main import create_app
-from transport_law.repository import LawRepository
 
 pytest.importorskip("chromadb")
 pytest.importorskip("langchain_text_splitters")
@@ -23,7 +21,7 @@ BASE = "/api/v1/knowledge"
 
 def uploaded_retriever(client):
     store = client.app.state.runtime.knowledge
-    return HybridRetriever(LawRepository([]), store.settings, store.embedder, knowledge=store)
+    return HybridRetriever(store, store.settings, store.embedder)
 
 
 def uploaded_hits(client, question, top_k=5):
@@ -173,15 +171,16 @@ def test_new_document_only_embeds_new_chunks_and_is_visible_without_restart(uplo
         assert len(embedder.queries) == 3
 
 
-def test_filename_of_existing_curated_source_is_also_reserved(upload_setup, repository):
+def test_names_have_no_implicit_reserved_corpus_files(upload_setup):
     settings, embedder = upload_setup
-    filename = Path(repository.searchable[0].source.file).name
     with TestClient(create_app(settings)) as client:
-        response = client.post(f"{BASE}/documents", files={"file": (filename, b"Replacement.")})
-        assert response.status_code == 409
-        assert response.json()["error"]["code"] == "duplicate_filename"
-        assert client.get(f"{BASE}/documents").json() == []
-    assert not embedder.calls
+        response = client.post(
+            f"{BASE}/documents", files={"file": ("legal_chunks.txt", b"New uploaded document.")}
+        )
+        assert response.status_code == 202
+        record = client.get(f"{BASE}/documents/{response.json()['id']}").json()
+        assert record["status"] == "ready"
+    assert len(embedder.calls) == 1
 
 
 def test_concurrent_same_name_has_one_durable_winner(upload_setup):
@@ -498,3 +497,74 @@ def test_ready_snapshot_checks_each_document_without_reprocessing(upload_setup, 
         store.ready_chunks()
     assert error.value.code == "vector_index_incomplete"
     assert len(embedder.calls) == before and not embedder.queries
+
+
+@pytest.mark.parametrize(
+    "update", [{"embedding_dimensions": 3}, {"embedding_query_instruction": "different"}]
+)
+def test_uploaded_index_rejects_incompatible_vector_configuration(upload_setup, update):
+    from transport_law.knowledge import KnowledgeStore
+
+    settings, embedder = upload_setup
+    store = KnowledgeStore(settings, embedder)
+    ident = store.receive("contract.txt", BytesIO(b"Stored configuration."))["id"]
+    store.process(ident)
+    other = KnowledgeStore(settings.model_copy(update=update), embedder)
+    with pytest.raises(AppError) as exc:
+        other.rank_vectors(other.ready_chunks(), limit=5, query_vector=[1.0, 0.0])
+    assert exc.value.code == "vector_index_mismatch"
+    assert not embedder.queries
+
+
+def test_missing_uploaded_vectors_are_not_silently_ignored(upload_setup):
+    from transport_law.knowledge import KnowledgeStore
+
+    settings, embedder = upload_setup
+    store = KnowledgeStore(settings, embedder)
+    ident = store.receive("lost.txt", BytesIO(b"Stored document."))["id"]
+    store.process(ident)
+    chunks = store.ready_chunks()
+    store._collection().delete(ids=[chunks[0].id])
+    with pytest.raises(AppError) as exc:
+        store.rank_vectors(chunks, limit=5, query_vector=[1.0, 0.0])
+    assert exc.value.code == "vector_index_incomplete"
+
+
+def test_ready_upload_is_readable_in_a_fresh_process_without_model_calls(upload_setup):
+    import subprocess
+    import sys
+
+    from transport_law.knowledge import KnowledgeStore
+
+    settings, embedder = upload_setup
+    store = KnowledgeStore(settings, embedder)
+    ident = store.receive("persist.txt", BytesIO(b"Persistent permit text."))["id"]
+    store.process(ident)
+    expected = [c.id for c in store.ready_chunks()]
+    script = """
+import json, sys
+from transport_law.config import Settings
+from transport_law.knowledge import KnowledgeStore
+class NoModels:
+    def embed_documents(self, *args): raise AssertionError("document embedding on read")
+    def embed_query(self, *args): raise AssertionError("query embedding on supplied vector")
+s = Settings(_env_file=None, knowledge_path=sys.argv[1], chroma_path=sys.argv[2],
+             knowledge_collection=sys.argv[3]).model_copy(update={"embedding_dimensions": 2})
+store = KnowledgeStore(s, NoModels())
+hits = store.rank_vectors(store.ready_chunks(), limit=5, query_vector=[1.0, 0.0])
+print(json.dumps([h.chunk.id for h in hits]))
+"""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(settings.knowledge_path),
+            str(settings.chroma_path),
+            settings.knowledge_collection,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(result.stdout) == expected

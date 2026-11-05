@@ -82,7 +82,7 @@ class SearchRequest(Model):
 
 
 class HybridScore(Model):
-    """两路候选列表中的父法条排名；RRF 分数不是相关概率。"""
+    """两路候选列表中的片段排名；RRF 分数不是相关概率。"""
 
     method: Literal["rrf"] = "rrf"
     rrf_k: int = Field(ge=1)

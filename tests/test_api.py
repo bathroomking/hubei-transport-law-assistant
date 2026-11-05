@@ -28,17 +28,17 @@ def test_frontend_and_assets_are_served_without_exposing_project_files(settings)
         assert client.get("/docs").status_code == 200
 
 
-def test_api_smoke_validation_and_missing_key(settings):
+def test_api_smoke_validation_and_missing_key(settings, seeded_repository):
     with TestClient(create_app(settings)) as client:
         health = client.get("/health").json()
-        assert health["chunk_count"] == 1336
-        assert health["pending_verification_count"] == 1336
+        assert health["chunk_count"] == 3
+        assert health["pending_verification_count"] == 3
         assert health["llm_configured"] is False
         assert health["retrieval_backend"] == "hybrid"
         assert health["online_only"] is True
         assert client.get("/docs").status_code == 200
-        hits = BM25Retriever(client.app.state.runtime.repository).search("路边挖沟有哪些依据？")
-        assert len(hits) == 5
+        hits = BM25Retriever(client.app.state.runtime.repository).search("施工许可")
+        assert hits[0].chunk.id == "UP-fixture-1"
         article = client.get("/api/v1/articles/" + hits[0].chunk.id)
         assert article.status_code == 200
         assert client.get("/api/v1/articles/unknown").status_code == 404
@@ -70,7 +70,9 @@ def test_online_ask_requires_embedding_key_before_retrieval(settings):
         assert response.json()["error"]["code"] == "embedding_not_configured"
 
 
-def test_service_restart_and_retrieval_do_not_load_chunking_dependencies(settings, monkeypatch):
+def test_service_restart_and_retrieval_do_not_load_chunking_dependencies(
+    settings, seeded_repository, monkeypatch
+):
     original_import = builtins.__import__
 
     def import_without_ingestion(name, *args, **kwargs):
@@ -84,7 +86,7 @@ def test_service_restart_and_retrieval_do_not_load_chunking_dependencies(setting
     for _ in range(2):
         with TestClient(create_app(settings)) as client:
             assert client.get("/health").json()["status"] == "ok"
-            hits = BM25Retriever(client.app.state.runtime.repository).search("公路法第四十四条")
+            hits = BM25Retriever(client.app.state.runtime.repository).search("施工许可")
             assert hits
             response = client.get("/api/v1/articles/" + hits[0].chunk.id)
             assert response.status_code == 200

@@ -1,9 +1,8 @@
-"""PDF 只提取至待整理区，不把未核对的跨页表格自动发布到知识库。"""
+"""读取上传文档并保留来源位置，供自动分块流程使用。"""
 
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -108,44 +107,5 @@ def load_documents(
     document_id: str | None = None,
     title: str | None = None,
 ) -> list[Document]:
-    """自动分块的加载入口；普通 extract-pdf 和服务启动不依赖 LangChain。"""
+    """读取文档并转换为携带来源信息的 LangChain Document。"""
     return to_documents(load_document(path), document_id=document_id, title=title)
-
-
-def check_new_output(path: Path, output: Path) -> None:
-    if output.resolve() == path.resolve() or output.exists():
-        raise AppError("output_exists", "输出文件已经存在，请选择新的路径。", 409)
-
-
-def write_jsonl(output: Path, rows: list[dict]) -> None:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with output.open("x", encoding="utf-8") as stream:
-            for row in rows:
-                stream.write(json.dumps(row, ensure_ascii=False) + "\n")
-    except FileExistsError as exc:
-        raise AppError("output_exists", "输出文件已经存在，请选择新的路径。", 409) from exc
-
-
-def extract_pdf(path: Path, output: Path) -> dict:
-    check_new_output(path, output)
-    if path.suffix.lower() != ".pdf":
-        raise AppError("unsupported_document", "extract-pdf 只支持 PDF 文件。", 400)
-    document = load_document(path)
-    rows = [
-        {
-            "file": document.file,
-            "sha256": document.sha256,
-            "pdf_page": page.pdf_page,
-            "text": page.text,
-            "status": "needs_review" if page.text.strip() else "needs_ocr",
-        }
-        for page in document.pages
-    ]
-    write_jsonl(output, rows)
-    return {
-        "page_count": len(rows),
-        "needs_ocr_count": sum(row["status"] == "needs_ocr" for row in rows),
-        "output": str(output),
-        "status": "staged_not_published",
-    }

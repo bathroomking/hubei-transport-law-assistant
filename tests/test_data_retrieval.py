@@ -1,108 +1,54 @@
-import hashlib
-import json
-import re
-
 import pytest
 from pydantic import ValidationError
 
 from transport_law.config import PROJECT_ROOT, Settings
 from transport_law.errors import AppError
-from transport_law.evaluation import evaluate_retrieval
-from transport_law.ingest import extract_pdf
-from transport_law.repository import LawRepository
+from transport_law.repository import ChunkRepository
 from transport_law.retrieval import BM25Retriever, tokenize
 from transport_law.schemas import SearchRequest
 
 
-@pytest.mark.parametrize(
-    "dataset,total,known_gaps",
-    [
-        (
-            "retrieval",
-            20,
-            {
-                "colloquial-01",
-                "colloquial-02",
-                "colloquial-03",
-                "colloquial-04",
-                "colloquial-05",
-                "outside-generic",
-                "outside-weather",
-                "outside-land",
-            },
-        ),
-        ("official_retrieval", 20, {"outside-weather", "outside-land"}),
-        ("traffic_police_retrieval", 30, {"out-of-scope-weather", "out-of-scope-tax"}),
-    ],
-)
-def test_full_corpus_bm25_regressions(retriever, dataset, total, known_gaps):
-    # 保留全库召回已知缺口；移除公路特判后，outside-crime 已正确空召回。
-    # 不修改题目/期望来伪造全通过，也不允许新增失败。
-    # 自然语言范围外题的最终拒答由问答模型负责，不能再依赖旧事项白名单。
-    report = evaluate_retrieval(PROJECT_ROOT / f"evals/{dataset}.jsonl", retriever)
-    assert report["total"] == total
-    failures = {row["id"] for row in report["results"] if not row["passed"]}
-    assert failures <= known_gaps, report["results"]
-    if dataset == "retrieval":
-        # 已知缺口中唯一仍有部分命中的口语题，也不能继续丢失现有依据。
-        partial = next(row for row in report["results"] if row["id"] == "colloquial-01")
-        assert "HB-ROAD-003-BANDS" in partial["retrieved_ids"]
+def test_keyword_ranking_uses_uploaded_text_and_exact_ids(retriever):
+    hits = retriever.search("施工许可", top_k=1)
+    assert [hit.chunk.id for hit in hits] == ["UP-fixture-1"]
+    assert retriever.search("请查看 UP-fixture-2")[0].chunk.id == "UP-fixture-2"
+    assert retriever.search("zxq987654") == []
 
 
-@pytest.mark.parametrize("question", ["喝了点酒开车会怎么样？", "武汉明天天气怎样？"])
-def test_candidates_do_not_require_item_aliases(retriever, question):
-    assert retriever.candidate_chunks(question) == retriever.chunks
-
-
-@pytest.mark.parametrize("question", ["zxqjv987654", "qpmznv246810"])
-def test_no_keyword_match_returns_no_sparse_hits(retriever, question):
-    assert retriever.search(question) == []
-
-
-@pytest.fixture
-def keyword_repository(repository):
-    template = repository.searchable[0]
-    return LawRepository(
+def test_legacy_classification_aliases_and_excerpt_links_do_not_change_bm25(repository):
+    expected = BM25Retriever(repository).search("施工许可")
+    changed = ChunkRepository(
         [
-            template.model_copy(
+            c.model_copy(
                 update={
-                    "id": ident,
-                    "document_id": "sample",
-                    "item_id": "ordinary_item",
-                    "text": text,
-                    "search_text": text,
-                    "aliases": aliases,
-                    "document_aliases": [],
-                    "related_excerpt_ids": [],
+                    "item_id": "old-item",
+                    "aliases": ["施工许可"],
+                    "document_aliases": ["另一名称"],
+                    "related_excerpt_ids": ["UP-fixture-1"],
                 }
             )
-            for ident, text, aliases in [
-                ("sample-plain", "alpha", []),
-                ("sample-boosted", "alpha", ["alpha"]),
-                ("sample-unrelated", "omega", []),
+            for c in repository.all_chunks
+        ]
+    )
+    actual = BM25Retriever(changed).search("施工许可")
+    assert [(h.chunk.id, h.score) for h in actual] == [(h.chunk.id, h.score) for h in expected]
+
+
+def test_no_keyword_match_is_not_padded(repository):
+    base = repository.all_chunks[0]
+    data = ChunkRepository(
+        [
+            base.model_copy(update={"id": ident, "text": text, "search_text": text})
+            for ident, text in [
+                ("sample-a", "alpha"),
+                ("sample-b", "alpha alpha"),
+                ("other", "omega"),
             ]
         ]
     )
-
-
-@pytest.mark.parametrize("item_id", ["road_occupation_excavation", "another_item"])
-def test_item_classification_does_not_change_keyword_ranking(keyword_repository, item_id):
-    changed = LawRepository(
-        [chunk.model_copy(update={"item_id": item_id}) for chunk in keyword_repository.searchable]
-    )
-    expected = BM25Retriever(keyword_repository).search("alpha")
-    actual = BM25Retriever(changed).search("alpha")
-    assert [(hit.chunk.id, hit.score) for hit in actual] == [
-        (hit.chunk.id, hit.score) for hit in expected
-    ]
-
-
-def test_generic_alias_bonus_keeps_keyword_scores_and_excludes_unrelated_text(keyword_repository):
-    hits = BM25Retriever(keyword_repository).search("alpha")
-    assert [hit.chunk.id for hit in hits] == ["sample-boosted", "sample-plain"]
-    assert hits[0].score - hits[1].score == pytest.approx(20)
-    # 简单词项的原始 BM25 分数小于 1，不再附加与匹配无关的固定分数。
-    assert 0 < hits[1].score < 1
+    hits = BM25Retriever(data).search("alpha")
+    assert {h.chunk.id for h in hits} == {"sample-a", "sample-b"}
+    assert all(h.score > 0 for h in hits)
 
 
 def test_tokenization_preserves_english_word_boundaries_and_chinese_layout():
@@ -110,41 +56,22 @@ def test_tokenization_preserves_english_word_boundaries_and_chinese_layout():
     assert tokenize("公 路\n许可") == tokenize("公路许可")
 
 
-@pytest.mark.parametrize(
-    ("question", "expected"),
-    [
-        ("公路法第四十四条第一款", "cn-highway-2017-A044"),
-        ("公路法第44条在资料里是怎么写的？", "cn-highway-2017-A044"),
-        ("公路法第76条", "cn-highway-2017-A076"),
-        ("公路安全保护条例第27条", "cn-highway-protection-2011-A027"),
-        ("HB-ROAD-003-REG62", "HB-ROAD-003-REG62"),
-    ],
-)
-def test_top_k_and_exact_article_rank(retriever, question, expected):
-    hits = retriever.search(question, 1)
-    assert len(hits) == 1
-    assert hits[0].chunk.id == expected
-
-
-def test_superseded_entries_are_not_retrieved(repository):
-    chunks = [chunk.model_copy(deep=True) for chunk in repository.searchable]
-    for chunk in chunks:
-        chunk.source.verification_status = "superseded"
-    assert BM25Retriever(LawRepository(chunks)).search("挖掘公路") == []
-
-
-@pytest.mark.parametrize("raw", ["", "{}\n", "not-json\n"])
-def test_bad_data_fails_at_load(tmp_path, raw):
-    path = tmp_path / "bad.jsonl"
-    path.write_text(raw, encoding="utf-8")
-    with pytest.raises(AppError, match="为空|格式不正确"):
-        LawRepository.from_jsonl(path)
+@pytest.mark.parametrize("top_k", [0, 11])
+def test_bm25_rejects_invalid_top_k(retriever, top_k):
+    with pytest.raises(ValueError):
+        retriever.search("施工许可", top_k)
 
 
 def test_duplicate_id_rejected(repository):
-    chunk = repository.searchable[0]
+    chunk = repository.all_chunks[0]
     with pytest.raises(AppError, match="重复"):
-        LawRepository([chunk, chunk])
+        ChunkRepository([chunk, chunk])
+
+
+def test_unknown_chunk_is_explicit_404(repository):
+    with pytest.raises(AppError) as exc:
+        repository.get_article("missing")
+    assert exc.value.code == "article_not_found" and exc.value.status_code == 404
 
 
 @pytest.mark.parametrize(
@@ -161,47 +88,16 @@ def test_request_boundaries(data):
         SearchRequest.model_validate(data)
 
 
-def test_secret_mask_and_relative_data_path(settings):
+def test_secret_mask_and_relative_storage_paths(settings):
     configured = Settings(
-        _env_file=None, deepseek_api_key="test-private-key", law_data_path="x.jsonl"
+        _env_file=None,
+        deepseek_api_key="test-private-key",
+        knowledge_path="sample-knowledge",
+        chroma_path="sample-chroma",
     )
     assert "test-private-key" not in repr(configured)
-    assert configured.law_data_path == PROJECT_ROOT / "x.jsonl"
+    assert configured.knowledge_path == PROJECT_ROOT / "sample-knowledge"
+    assert configured.chroma_path == PROJECT_ROOT / "sample-chroma"
+    assert "law_data_path" not in Settings.model_fields
+    assert "chroma_collection" not in Settings.model_fields
     assert not settings.llm_configured
-
-
-def test_seed_provenance_matches_actual_pdf(repository):
-    pypdf = pytest.importorskip("pypdf")
-    path = PROJECT_ROOT / "data/raw/P020250918567517504506.pdf"
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    reader = pypdf.PdfReader(path)
-    assert len(reader.pages) == 215
-    text = re.sub(r"\s+", "", reader.pages[1].extract_text())
-    for chunk in repository.searchable:
-        if chunk.document_id != "hubei-discretion-upload":
-            continue
-        assert chunk.source.sha256 == digest
-        assert chunk.source.pdf_page == 2
-        assert chunk.source.verification_status == "pending"
-        assert chunk.source.effective_on is None
-        # 表格多栏文本提取顺序不稳定，独立核对关键原文，不将全文串接当成版式核验。
-    assert "任何单位和个人不得擅自占用、挖掘公路" in text
-    assert "可处1万元以上2万元以下罚款" in text
-
-
-def test_pdf_extraction_preserves_pages_and_does_not_overwrite(tmp_path):
-    pypdf = pytest.importorskip("pypdf")
-    path = tmp_path / "empty.pdf"
-    writer = pypdf.PdfWriter()
-    writer.add_blank_page(width=300, height=400)
-    with path.open("wb") as stream:
-        writer.write(stream)
-    output = tmp_path / "pages.jsonl"
-    result = extract_pdf(path, output)
-    assert result["page_count"] == result["needs_ocr_count"] == 1
-    row = json.loads(output.read_text())
-    assert row["pdf_page"] == 1 and row["status"] == "needs_ocr"
-    original = output.read_bytes()
-    with pytest.raises(AppError, match="已经存在"):
-        extract_pdf(path, output)
-    assert output.read_bytes() == original

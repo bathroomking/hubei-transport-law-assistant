@@ -1,15 +1,12 @@
 import hashlib
-import json
 
 import pytest
 from pydantic import ValidationError
 
-from transport_law import cli
 from transport_law.chunking import (
     ChunkingOptions,
     DraftChunk,
     build_draft_chunks,
-    chunk_document,
     split_legal_documents,
 )
 from transport_law.errors import AppError
@@ -20,7 +17,6 @@ from transport_law.ingest import (
     load_documents,
     to_documents,
 )
-from transport_law.repository import LawRepository
 
 pytest.importorskip("langchain_text_splitters")
 
@@ -128,103 +124,6 @@ def test_markdown_preserves_headings_punctuation_and_utf8_bom(tmp_path):
     assert_source_coverage(doc, chunks)
 
 
-@pytest.mark.parametrize("size, overlap", [(0, 0), (20001, 0), (100, -1), (100, 100), (100, 101)])
-def test_invalid_chunk_parameters_do_not_write_output(tmp_path, size, overlap):
-    path = tmp_path / "sample.txt"
-    path.write_text("示例文本", encoding="utf-8")
-    output = tmp_path / "draft.jsonl"
-    with pytest.raises(ValidationError):
-        chunk_document(path, output, chunk_size=size, chunk_overlap=overlap)
-    assert not output.exists()
-
-
-@pytest.mark.parametrize(
-    "name, content, code",
-    [
-        ("empty.txt", b" \n", "no_extractable_text"),
-        ("bad.txt", b"\xff\xff", "invalid_encoding"),
-        ("example.docx", b"example", "unsupported_document"),
-        ("bad.pdf", b"not a PDF", "pdf_read_failed"),
-    ],
-)
-def test_unreadable_documents_fail_without_output(tmp_path, name, content, code):
-    path = tmp_path / name
-    path.write_bytes(content)
-    output = tmp_path / "draft.jsonl"
-    with pytest.raises(AppError) as error:
-        chunk_document(path, output)
-    assert error.value.code == code
-    assert not output.exists()
-
-
-def test_existing_outputs_and_source_are_never_overwritten(tmp_path):
-    path = tmp_path / "sample.txt"
-    path.write_text("测试原文", encoding="utf-8")
-    output = tmp_path / "draft.jsonl"
-    output.write_text("existing output", encoding="utf-8")
-    for target in (path, output):
-        original = target.read_bytes()
-        with pytest.raises(AppError, match="已经存在"):
-            chunk_document(path, target)
-        assert target.read_bytes() == original
-
-
-def test_scanned_pdf_is_reported_without_publishing(tmp_path, monkeypatch):
-    monkeypatch.setattr("transport_law.chunking.load_document", lambda _: document("", ""))
-    output = tmp_path / "draft.jsonl"
-    with pytest.raises(AppError) as error:
-        chunk_document(tmp_path / "scan.pdf", output)
-    assert error.value.code == "no_extractable_text"
-    assert not output.exists()
-
-
-def test_pdf_report_lists_pages_requiring_ocr(tmp_path, monkeypatch):
-    doc = document("前页文字", "", "后页文字")
-    monkeypatch.setattr("transport_law.chunking.load_document", lambda _: doc)
-    output = tmp_path / "draft.jsonl"
-    report = chunk_document(
-        tmp_path / "mixed.pdf", output, document_id="mixed-document", title="混合 PDF"
-    )
-    assert report == {
-        "status": "staged_not_published",
-        "chunk_count": 2,
-        "pdf_page_count": 3,
-        "needs_ocr_pages": [2],
-        "chunking": ChunkingOptions().model_dump(),
-        "output": str(output),
-        "notice": "候选分块尚未进入检索库；需核对原文、表格关系、事项分类及来源版本。",
-    }
-    chunks = [DraftChunk.model_validate_json(line) for line in output.read_text().splitlines()]
-    assert all(
-        chunk.document_id == "mixed-document" and chunk.title == "混合 PDF" for chunk in chunks
-    )
-    assert [chunk.source.locations[0].pdf_page for chunk in chunks] == [1, 3]
-    assert_source_coverage(doc, chunks)
-
-
-def test_cli_chunks_new_document_without_settings_or_runtime(tmp_path, monkeypatch, capsys):
-    def unexpected_call(*args, **kwargs):
-        pytest.fail("自动分块不应读取 .env 或创建模型客户端")
-
-    monkeypatch.setattr(cli, "Settings", unexpected_call)
-    monkeypatch.setattr(cli, "build_runtime", unexpected_call)
-    path = tmp_path / "sample.txt"
-    path.write_text("第一条　这是新文档的测试内容。\n第二条　第二个示例。", encoding="utf-8")
-    output = tmp_path / "staging" / "draft.jsonl"
-    args = cli.parser().parse_args(
-        ["chunk-document", str(path), "--output", str(output), "--document-id", "sample"]
-    )
-    assert cli.run(args) == 0
-    report = json.loads(capsys.readouterr().out)
-    assert report["chunk_count"] == 2
-    rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
-    assert all(row["review_status"] == "needs_review" for row in rows)
-    assert all(row["document_id"] == "sample" for row in rows)
-    # 草稿格式与正式 LegalChunk 区分，防止误当作已整理资料直接载入。
-    with pytest.raises(AppError, match="格式不正确"):
-        LawRepository.from_jsonl(output)
-
-
 def test_document_metadata_survives_loading_splitting_and_storage(tmp_path):
     path = tmp_path / "sample.txt"
     path.write_text("第一条　" + "测试文本，" * 60, encoding="utf-8")
@@ -277,3 +176,44 @@ def test_document_adapter_still_rejects_invalid_business_metadata():
     part.metadata["source"]["locations"][0]["pdf_page"] = 0
     with pytest.raises(ValidationError):
         DraftChunk.from_document(part)
+
+
+@pytest.mark.parametrize("size, overlap", [(0, 0), (20001, 0), (100, -1), (100, 100), (100, 101)])
+def test_invalid_chunk_parameters(size, overlap):
+    with pytest.raises(ValidationError):
+        ChunkingOptions(chunk_size=size, chunk_overlap=overlap)
+
+
+@pytest.mark.parametrize(
+    "name, content, code",
+    [
+        ("bad.txt", b"\xff\xff", "invalid_encoding"),
+        ("example.docx", b"example", "unsupported_document"),
+        ("bad.pdf", b"not a PDF", "pdf_read_failed"),
+    ],
+)
+def test_unreadable_documents_fail(tmp_path, name, content, code):
+    path = tmp_path / name
+    path.write_bytes(content)
+    with pytest.raises(AppError) as error:
+        load_document(path)
+    assert error.value.code == code
+
+
+def test_blank_documents_have_no_chunks():
+    assert build_draft_chunks(document("", "  "), ChunkingOptions()) == []
+
+
+def test_loading_blank_pdf_keeps_physical_page(tmp_path):
+    from pypdf import PdfWriter
+
+    path = tmp_path / "blank.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=300, height=400)
+    with path.open("wb") as stream:
+        writer.write(stream)
+    before = path.read_bytes()
+    loaded = load_document(path)
+    assert len(loaded.pages) == 1
+    assert loaded.pages[0].pdf_page == 1 and not loaded.pages[0].text.strip()
+    assert path.read_bytes() == before

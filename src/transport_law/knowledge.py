@@ -8,7 +8,6 @@ import sqlite3
 import unicodedata
 import uuid
 from collections import Counter
-from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -48,18 +47,11 @@ class KnowledgeStore:
         self,
         settings: Settings,
         embedder: Embeddings | None = None,
-        reserved_filenames: Iterable[str] = (),
     ):
         self.settings = settings
         self.path = settings.knowledge_path
         self.database = self.path / "uploads.sqlite3"
         self.embedder = embedder or DashScopeEmbeddings(settings)
-        self.reserved_names = {
-            unicodedata.normalize("NFKC", name.replace("\\", "/").rsplit("/", 1)[-1])
-            .strip()
-            .casefold()
-            for name in reserved_filenames
-        }
 
     @property
     def contract(self) -> dict:
@@ -165,8 +157,6 @@ class KnowledgeStore:
 
     def receive(self, filename: str, stream: BinaryIO) -> dict:
         name, name_key, suffix = _filename(filename)
-        if name_key in self.reserved_names:
-            raise AppError("duplicate_filename", "正式知识库已存在同名文件，禁止重复上传。", 409)
         try:
             with self._lock("filename-" + digest(name_key)):
                 return self._receive(name, name_key, suffix, stream)
@@ -277,8 +267,6 @@ class KnowledgeStore:
         return self.get_document(ident)
 
     def _collection(self, *, create: bool = False):
-        if self.settings.knowledge_collection == self.settings.chroma_collection:
-            raise AppError("knowledge_collection_conflict", "上传库须使用独立的 collection。", 409)
         with chroma_errors():
             from chromadb.errors import NotFoundError
 
@@ -480,7 +468,7 @@ class KnowledgeStore:
             raise AppError("vector_index_incomplete", "上传资料正文缺失，请检查本地索引。", 503)
         return chunks
 
-    def _rank_vectors(
+    def rank_vectors(
         self,
         chunks: list[LegalChunk],
         *,
@@ -488,6 +476,8 @@ class KnowledgeStore:
         query_vector: list[float],
     ) -> list[SearchHit]:
         by_id = {chunk.id: chunk for chunk in chunks}
+        if not by_id:
+            return []
         with chroma_errors():
             collection = self._collection()
             where = {"document_id": {"$in": sorted({chunk.document_id for chunk in chunks})}}

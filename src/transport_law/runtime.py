@@ -4,7 +4,7 @@ from transport_law.config import Settings
 from transport_law.hybrid import HybridRetriever
 from transport_law.knowledge import KnowledgeStore
 from transport_law.llm import DeepSeekClient, LanguageModel
-from transport_law.repository import CombinedRepository, LawRepository
+from transport_law.repository import KnowledgeRepository
 from transport_law.retrieval import Retriever
 from transport_law.service import LawService
 
@@ -12,7 +12,7 @@ from transport_law.service import LawService
 @dataclass
 class Runtime:
     settings: Settings
-    repository: CombinedRepository
+    repository: KnowledgeRepository
     service: LawService
     knowledge: KnowledgeStore
 
@@ -24,18 +24,13 @@ def build_runtime(
     retriever: Retriever | None = None,
 ) -> Runtime:
     settings = settings or Settings()
-    curated = LawRepository.from_jsonl(settings.law_data_path)
-    knowledge = KnowledgeStore(
-        settings, reserved_filenames=[chunk.source.file for chunk in curated.all_chunks]
-    )
-    repository = CombinedRepository(curated, knowledge)
+    knowledge = KnowledgeStore(settings)
+    repository = KnowledgeRepository(knowledge)
     return Runtime(
         settings=settings,
         repository=repository,
         service=LawService(
-            retriever
-            if retriever is not None
-            else HybridRetriever(curated, settings, knowledge=knowledge),
+            retriever if retriever is not None else HybridRetriever(knowledge, settings),
             llm or DeepSeekClient(settings),
             settings=settings,
         ),

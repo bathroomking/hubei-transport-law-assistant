@@ -35,7 +35,7 @@ def create_app(
         title="湖北交通运输法规与裁量助手",
         version=__version__,
         description=(
-            "在线交通法规与裁量问答：白话提问，混合检索正式法规和已入库上传资料，"
+            "在线交通法规与裁量问答：白话提问，混合检索已入库的上传资料，"
             "由 DeepSeek 根据原文回答并提供出处。文件效力及个案适用尚未核验。"
         ),
         lifespan=lifespan,

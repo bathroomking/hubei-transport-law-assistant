@@ -1,57 +1,46 @@
 import json
 from io import BytesIO
+from pathlib import Path
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
-from test_vector_store import FakeEmbeddings
-from test_vector_store import vector_fixture as vector_fixture
+from test_knowledge import upload_setup as upload_setup
 
+from transport_law.cli import parser, run
 from transport_law.errors import AppError
 from transport_law.hybrid import HybridRetriever
 from transport_law.knowledge import KnowledgeStore
 from transport_law.llm import Completion
 from transport_law.main import create_app
 from transport_law.retrieval import BM25Retriever
-from transport_law.vector_store import build_vector_index
-
-pytest.importorskip("langchain_text_splitters")
 
 
 @pytest.fixture(autouse=True)
-def forbid_external_http(monkeypatch):
-    # TestClient 使用自己的 ASGI transport；真实 HTTP transport 在本模块一律禁止。
+def forbid_external_http_and_legacy_corpus_reads(monkeypatch):
     def unexpected_request(*args, **kwargs):
-        pytest.fail("统一问答测试不得发出真实 HTTP 请求")
+        pytest.fail("端到端离线测试不得调用真实 HTTP 服务")
 
     async def unexpected_async_request(*args, **kwargs):
-        pytest.fail("统一问答测试不得发出真实 HTTP 请求")
+        pytest.fail("端到端离线测试不得调用真实 HTTP 服务")
 
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", unexpected_request)
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", unexpected_async_request)
+    original = Path.open
+
+    def guarded_open(path, *args, **kwargs):
+        if "/data/raw/" in str(path) or "/data/processed/" in str(path):
+            pytest.fail(f"问答不得读取旧资料目录：{path}")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", guarded_open)
 
 
 @pytest.fixture
-def online_setup(vector_fixture, monkeypatch):
-    settings, repository, documents = vector_fixture
-    settings = settings.model_copy(
-        update={
-            "deepseek_api_key": SecretStr("offline-test-key"),
-            "dashscope_api_key": SecretStr("offline-test-key"),
-        }
-    )
-    embedder = FakeEmbeddings()
+def online_setup(upload_setup, monkeypatch):
+    settings, embedder = upload_setup
     monkeypatch.setattr("transport_law.hybrid.DashScopeEmbeddings", lambda settings: embedder)
-    monkeypatch.setattr("transport_law.knowledge.DashScopeEmbeddings", lambda settings: embedder)
-    return settings, repository, documents, embedder
-
-
-@pytest.fixture
-def online_index(online_setup):
-    settings, repository, documents, embedder = online_setup
-    build_vector_index(settings, repository, documents, embedder=embedder)
-    return settings, repository, embedder
+    return settings, embedder
 
 
 class EvidenceLLM:
@@ -60,17 +49,18 @@ class EvidenceLLM:
 
     async def complete(self, messages, *, json_mode):
         assert json_mode is True
-        context_text = messages[1]["content"].split("Context:\n", 1)[1]
-        context, _ = json.JSONDecoder().raw_decode(context_text)
+        content = messages[1]["content"].split("Context:\n", 1)[1]
+        context, _ = json.JSONDecoder().raw_decode(content)
         self.contexts.append(context)
-        # 同时引用正式资料和上传资料；只有一类资料时引用当前这一类。
-        formal = next((row for row in context if row["kind"] != "document"), None)
-        uploaded = next((row for row in context if row["kind"] == "document"), None)
-        citations = [row["id"] for row in (formal, uploaded) if row is not None]
         return Completion(
             content=json.dumps(
                 {
-                    "claims": [{"text": "请核对所附材料的原文。", "citation_ids": citations}],
+                    "claims": [
+                        {
+                            "text": "请核对上传资料原文。",
+                            "citation_ids": [c["id"] for c in context[:2]],
+                        }
+                    ],
                     "follow_up_questions": [],
                 }
             ),
@@ -78,16 +68,32 @@ class EvidenceLLM:
         )
 
 
-def test_unified_ask_merges_both_libraries_and_publishes_ready_sources_without_restart(
-    online_index, monkeypatch
+def test_empty_store_starts_and_cli_ask_needs_no_handwritten_corpus(
+    online_setup, monkeypatch, capsys
 ):
-    settings, repository, embedder = online_index
-    question = "那我接下来该咋办呀？"
-    assert BM25Retriever(repository).candidate_chunks(question) == repository.searchable
-    sparse_builds = []
+    settings, embedder = online_setup
+    llm = EvidenceLLM()
+    with TestClient(create_app(settings, llm)) as client:
+        assert client.get("/").status_code == 200
+        assert client.get("/health").json()["chunk_count"] == 0
+        result = client.post("/api/v1/ask", json={"question": "施工许可如何申请？"})
+        assert result.status_code == 200
+        assert result.json()["status"] == "insufficient_evidence"
+        assert not result.json()["source_documents"]
+    monkeypatch.setattr("transport_law.cli.Settings", lambda: settings)
+    monkeypatch.setattr("transport_law.runtime.DeepSeekClient", lambda config: llm)
+    assert run(parser().parse_args(["ask", "施工许可如何申请？"])) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "insufficient_evidence"
+    assert not embedder.calls and not embedder.queries and not llm.contexts
+    assert not settings.chroma_path.exists()
+
+
+def test_upload_is_visible_to_same_runtime_and_citations_without_restart(online_setup, monkeypatch):
+    settings, embedder = online_setup
+    builds = []
 
     def build_sparse(repository):
-        sparse_builds.append(len(repository.searchable))
+        builds.append(len(repository.searchable))
         return BM25Retriever(repository)
 
     monkeypatch.setattr("transport_law.hybrid.BM25Retriever", build_sparse)
@@ -96,138 +102,107 @@ def test_unified_ask_merges_both_libraries_and_publishes_ready_sources_without_r
         runtime = client.app.state.runtime
         assert isinstance(runtime.service.retriever, HybridRetriever)
         assert runtime.repository.knowledge is runtime.knowledge
-        first = client.post("/api/v1/ask", json={"question": question, "top_k": 3})
-        assert first.status_code == 200, first.text
-        assert len(first.json()["source_documents"]) == 2
-        assert embedder.queries == [question]
-        assert sparse_builds == [2]
-
-        upload = client.post(
-            "/api/v1/knowledge/documents",
-            files={"file": ("施工说明.txt", "占用公路需许可，应核对许可范围。".encode())},
+        assert (
+            client.post("/api/v1/ask", json={"question": "施工许可"}).json()["status"]
+            == "insufficient_evidence"
         )
-        assert upload.status_code == 202, upload.text
-        uploaded_id = upload.json()["id"]
-        record = client.get(f"/api/v1/knowledge/documents/{uploaded_id}").json()
-        assert record["status"] == "ready"
-        assert record["chunk_count"] == record["embedded_count"] == 1
-        embedded_batches = len(embedder.documents)
-
-        hits = runtime.service.retriever.search(question, top_k=3)
-        assert len(hits) == 3
-        assert {hit.chunk.document_id for hit in hits} == {"test-road", uploaded_id}
-        # 两库先形成同一路 dense 排名；上传库首位不能另外从 dense_rank=1 起算。
-        assert {hit.retrieval.dense_rank for hit in hits} == {1, 2, 3}
-        uploaded_hit = next(hit for hit in hits if hit.chunk.document_id == uploaded_id)
-        assert uploaded_hit.retrieval.dense_rank == 2
-        assert all(hit.retrieval.method == "rrf" for hit in hits)
+        assert builds == [0]
+        response = client.post(
+            "/api/v1/knowledge/documents",
+            files={
+                "file": (
+                    "施工说明.txt",
+                    "第一条 施工许可需要审批。\n第二条 施工许可应留存记录。".encode(),
+                )
+            },
+        )
+        assert response.status_code == 202, response.text
+        ident = response.json()["id"]
+        record = client.get(f"/api/v1/knowledge/documents/{ident}").json()
+        assert record["status"] == "ready" and record["chunk_count"] == 2
+        question = "施工许可"
+        answer = client.post("/api/v1/ask", json={"question": question}).json()
+        assert answer["status"] == "answered"
+        assert len(answer["source_documents"]) == len(answer["sources"]) == 2
+        assert {c["document_id"] for c in answer["sources"]} == {ident}
+        assert embedder.queries == [question]
+        assert builds == [0, 2]
+        batches = len(embedder.calls)
+        again = client.post("/api/v1/ask", json={"question": question}).json()
+        assert again["sources"] == answer["sources"]
+        assert builds == [0, 2] and len(embedder.calls) == batches
         assert embedder.queries == [question, question]
-        assert sparse_builds == [2, 3]
-
-        second = client.post("/api/v1/ask", json={"question": question, "top_k": 3})
-        assert second.status_code == 200, second.text
-        answer = second.json()
-        assert answer["source_documents"] == [hit.chunk.model_dump(mode="json") for hit in hits]
-        assert len(answer["sources"]) == 2
-        assert {source["document_id"] for source in answer["sources"]} == {
-            "test-road",
-            uploaded_id,
-        }
-        assert answer["applicability_status"] == "not_verified"
-        assert len(llm.contexts) == 2
-        assert [row["id"] for row in llm.contexts[-1]] == [hit.chunk.id for hit in hits]
-        # 一次查询只有一个问题向量，两座 collection 不重复请求，也不重建文档向量。
-        assert embedder.queries == [question, question, question]
-        assert len(embedder.documents) == embedded_batches
-        assert sparse_builds == [2, 3]  # ready 快照未变，不重复构建联合词频统计。
-
         for source in answer["sources"]:
-            article = client.get(f"/api/v1/articles/{source['id']}")
-            assert article.status_code == 200
-            assert article.json() == source
+            assert client.get(f"/api/v1/articles/{source['id']}").json() == source
             document = client.get(
-                f"/api/v1/documents/{source['document_id']}",
-                params={"version_id": source["version_id"]},
+                f"/api/v1/documents/{ident}", params={"version_id": source["version_id"]}
             )
-            assert document.status_code == 200, document.text
-            body = document.json()
-            assert body["version_id"] == source["version_id"]
-            assert source in body["articles"]
-            if source["document_id"] == uploaded_id:
-                assert body["coverage"] == "uploaded_document"
-                assert body["articles"] == [source]
-            else:
-                assert body["articles"] == [
-                    chunk.model_dump(mode="json") for chunk in repository.all_chunks
-                ]
+            assert document.status_code == 200
+            assert document.json()["coverage"] == "uploaded_document"
+            assert source in document.json()["articles"]
+        assert answer["applicability_status"] == "not_verified"
+        hits = runtime.service.retriever.search(question)
+        assert all(h.retrieval.bm25_rank and h.retrieval.dense_rank for h in hits)
 
 
-def test_sparse_and_dense_ranks_are_global_across_libraries(online_index):
-    settings, repository, embedder = online_index
-    knowledge = KnowledgeStore(settings)
-    uploaded_id = knowledge.receive("说明.txt", BytesIO("占用公路需许可。".encode()))["id"]
-    knowledge.process(uploaded_id)
-    assert knowledge.get_document(uploaded_id)["status"] == "ready"
-    retriever = HybridRetriever(repository, settings, embedder, knowledge=knowledge)
-    hits = retriever.search("占用公路需许可", top_k=3)
-    assert {hit.chunk.document_id for hit in hits} == {"test-road", uploaded_id}
-    # 正式库和上传库共同竞争排名，两边各自第一名不能都标成同一路 rank=1。
-    assert {hit.retrieval.bm25_rank for hit in hits} == {1, 2, 3}
-    assert {hit.retrieval.dense_rank for hit in hits} == {1, 2, 3}
-    assert embedder.queries == ["占用公路需许可"]
+def test_cli_reads_existing_uploaded_library_and_never_reembeds_documents(
+    online_setup, monkeypatch, capsys
+):
+    settings, embedder = online_setup
+    store = KnowledgeStore(settings)
+    ident = store.receive("说明.txt", BytesIO("施工许可需要审批。".encode()))["id"]
+    store.process(ident)
+    expected = store.ready_chunks()[0]
+    llm = EvidenceLLM()
+    before = len(embedder.calls)
+    monkeypatch.setattr("transport_law.cli.Settings", lambda: settings)
+    monkeypatch.setattr("transport_law.runtime.DeepSeekClient", lambda config: llm)
+    assert run(parser().parse_args(["ask", "施工许可"])) == 0
+    answer = json.loads(capsys.readouterr().out)
+    assert answer["sources"] == [expected.model_dump(mode="json")]
+    assert embedder.queries == ["施工许可"] and len(embedder.calls) == before
 
 
-@pytest.mark.parametrize(
-    "question",
-    ["喝了点酒开车会怎么样？", "车停路边被贴条怎么办？", "开车时接了一个电话会怎么处理？"],
-)
-def test_everyday_language_reaches_dense_retrieval_without_aliases(online_index, question):
-    settings, repository, embedder = online_index
-    assert BM25Retriever(repository).candidate_chunks(question) == repository.searchable
-    retriever = HybridRetriever(repository, settings, embedder, knowledge=KnowledgeStore(settings))
-    hits = retriever.search(question)
-    assert {hit.chunk.id for hit in hits} == {chunk.id for chunk in repository.searchable}
-    assert all(hit.retrieval.dense_rank for hit in hits)
-    assert embedder.queries == [question]
+def test_queued_failed_chunks_and_partial_vectors_are_excluded_from_answer(online_setup):
+    settings, embedder = online_setup
+    store = KnowledgeStore(settings)
+    queued = store.receive("queued.txt", BytesIO(b"Unprocessed permit."))["id"]
+    embedder.fail_on_call = 2
+    body = "\n".join(f"# Part {i}\nFailed permit {i}." for i in range(6))
+    failed = store.receive("failed.md", BytesIO(body.encode()))["id"]
+    store.process(failed)
+    assert store.get_document(failed)["status"] == "failed"
+    assert store.get_document(failed)["embedded_count"] == 2
+    llm = EvidenceLLM()
+    with TestClient(create_app(settings, llm)) as client:
+        answer = client.post("/api/v1/ask", json={"question": "permit"}).json()
+        assert answer["status"] == "insufficient_evidence"
+        assert not embedder.queries and not llm.contexts
+        assert client.get(f"/api/v1/documents/{failed}").status_code == 404
+        assert client.get(f"/api/v1/documents/{queued}").status_code == 404
+        embedder.fail_on_call = None
+        added = client.post(
+            "/api/v1/knowledge/documents", files={"file": ("ready.txt", b"Ready permit.")}
+        )
+        ready = added.json()["id"]
+        answer = client.post("/api/v1/ask", json={"question": "permit"}).json()
+        assert {c["document_id"] for c in answer["source_documents"]} == {ready}
+        assert embedder.queries == ["permit"]
 
 
-def test_explicit_missing_article_does_not_broaden_or_call_embedding(online_setup):
-    settings, repository, _, embedder = online_setup
-    retriever = HybridRetriever(repository, settings, embedder, knowledge=KnowledgeStore(settings))
-    assert retriever.search("测试公路法第999条") == []
-    assert embedder.queries == []
-    assert not settings.chroma_path.exists()
+def test_dense_failure_does_not_fall_back_to_sparse_answer(online_setup, monkeypatch):
+    settings, embedder = online_setup
+    store = KnowledgeStore(settings)
+    ident = store.receive("说明.txt", BytesIO("施工许可需要审批。".encode()))["id"]
+    store.process(ident)
 
-
-def test_dense_failure_is_not_replaced_with_sparse_answer(online_index, monkeypatch):
-    settings, repository, embedder = online_index
-    question = "公路挖沟有哪些依据？"
-    assert BM25Retriever(repository).search(question)
-
-    def unavailable(question):
+    def fail(question):
         raise AppError("embedding_unavailable", "模拟在线向量服务失败。", 503)
 
-    monkeypatch.setattr(embedder, "embed_query", unavailable)
+    monkeypatch.setattr(embedder, "embed_query", fail)
     llm = EvidenceLLM()
     with TestClient(create_app(settings, llm)) as client:
-        response = client.post("/api/v1/ask", json={"question": question})
+        response = client.post("/api/v1/ask", json={"question": "施工许可"})
         assert response.status_code == 503
         assert response.json()["error"]["code"] == "embedding_unavailable"
-        assert llm.contexts == []
-
-
-def test_missing_index_allows_startup_but_ask_reports_local_error(online_setup):
-    settings, _, _, embedder = online_setup
-    llm = EvidenceLLM()
-    with TestClient(create_app(settings, llm)) as client:
-        health = client.get("/health")
-        assert health.status_code == 200
-        assert health.json()["online_only"] is True
-        assert client.get("/").status_code == 200
-        assert embedder.queries == []
-        response = client.post("/api/v1/ask", json={"question": "公路挖沟有哪些依据？"})
-        assert response.status_code == 503
-        assert response.json()["error"]["code"] == "vector_index_missing"
-        assert llm.contexts == []
-        assert embedder.queries == []
-        assert not settings.chroma_path.exists()
+        assert not llm.contexts

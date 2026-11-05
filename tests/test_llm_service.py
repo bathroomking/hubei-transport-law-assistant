@@ -27,7 +27,7 @@ def generated(ids=None):
             "claims": [
                 {
                     "text": "材料载有擅自占用、挖掘公路的规定。",
-                    "citation_ids": ids or ["cn-highway-2017-A044"],
+                    "citation_ids": ids or ["UP-fixture-1"],
                 }
             ],
             "follow_up_questions": ["具体道路属性和许可情况是什么？"],
@@ -52,8 +52,8 @@ def envelope(content="测试回复", finish="stop"):
 def test_sources_are_filled_from_repository(repository, retriever, online_settings):
     llm = FakeLLM(generated())
     service = LawService(retriever, llm, online_settings)
-    result = asyncio.run(service.ask(SearchRequest(question="公路挖沟怎么处理？")))
-    assert result.sources == [repository.get_article("cn-highway-2017-A044")]
+    result = asyncio.run(service.ask(SearchRequest(question="施工许可如何申请？")))
+    assert result.sources == [repository.get_article("UP-fixture-1")]
     assert result.applicability_status == "not_verified"
     assert llm.calls[0][1] is True
     assert "verification_status" in llm.calls[0][0][1]["content"]
@@ -62,16 +62,18 @@ def test_sources_are_filled_from_repository(repository, retriever, online_settin
 def test_nonexistent_article_never_calls_llm(retriever, online_settings):
     llm = FakeLLM("should not be called")
     result = asyncio.run(
-        LawService(retriever, llm, online_settings).ask(SearchRequest(question="公路法第999条"))
+        LawService(retriever, llm, online_settings).ask(
+            SearchRequest(question="zxq987654 无匹配词")
+        )
     )
     assert result.status == "insufficient_evidence"
     assert result.sources == [] and llm.calls == []
 
 
 def test_rejects_citation_that_exists_but_was_not_retrieved(retriever, online_settings):
-    request = SearchRequest(question="公路法第四十四条第一款", top_k=1)
-    assert retriever.search(request.question, 1)[0].chunk.id == "cn-highway-2017-A044"
-    llm = FakeLLM(generated(["HB-ROAD-003-BANDS"]))
+    request = SearchRequest(question="施工许可", top_k=1)
+    assert retriever.search(request.question, 1)[0].chunk.id == "UP-fixture-1"
+    llm = FakeLLM(generated(["UP-fixture-2"]))
     with pytest.raises(AppError) as error:
         asyncio.run(LawService(retriever, llm, online_settings).ask(request))
     assert error.value.code == "invalid_citation"
@@ -92,7 +94,7 @@ def test_rejects_bad_generated_structure(retriever, content, online_settings):
     with pytest.raises(AppError) as error:
         asyncio.run(
             LawService(retriever, FakeLLM(content), online_settings).ask(
-                SearchRequest(question="公路挖沟怎么处理？")
+                SearchRequest(question="施工许可如何申请？")
             )
         )
     assert error.value.code == "llm_invalid_json"

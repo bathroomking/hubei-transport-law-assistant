@@ -19,7 +19,6 @@ class Settings(BaseSettings):
     deepseek_timeout_seconds: float = Field(default=120, gt=0, le=300)
     deepseek_max_tokens: int = Field(default=3000, ge=128, le=16384)
     deepseek_max_retries: int = Field(default=1, ge=0, le=3)
-    law_data_path: Path = PROJECT_ROOT / "data/processed/legal_chunks.jsonl"
     retrieval_top_k: int = Field(default=5, ge=1, le=10)
     hybrid_candidate_k: int = Field(default=50, ge=10, le=200)
     hybrid_rrf_k: int = Field(default=60, ge=1, le=1000)
@@ -39,7 +38,6 @@ class Settings(BaseSettings):
         min_length=1,
     )
     chroma_path: Path = PROJECT_ROOT / "data/local/chroma"
-    chroma_collection: str = Field(default="transport_law_bailian_v4_2048_v1", min_length=3)
     knowledge_path: Path = PROJECT_ROOT / "data/local/knowledge"
     knowledge_collection: str = Field(default="transport_uploads_v4_2048_v1", min_length=3)
     upload_max_bytes: int = Field(default=20 * 1024 * 1024, gt=0, le=100 * 1024 * 1024)
@@ -74,7 +72,7 @@ class Settings(BaseSettings):
             raise ValueError("EMBEDDING_DIMENSIONS 必须是百炼 text-embedding-v4 支持的维度")
         return value
 
-    @field_validator("law_data_path", "chroma_path", "knowledge_path")
+    @field_validator("chroma_path", "knowledge_path")
     @classmethod
     def resolve_path(cls, value: Path) -> Path:
         return value if value.is_absolute() else PROJECT_ROOT / value

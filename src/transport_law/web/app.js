@@ -7,12 +7,6 @@
   const input = $("#ask-question");
   const results = $("#ask-results");
   const dialog = $("#detail-dialog");
-  const coverageNames = {
-    full_text: "整部法规",
-    selected_sections: "已收录章节",
-    excerpts: "已收录节选",
-    uploaded_document: "上传文档",
-  };
   let questionController;
   let dialogController;
   let healthLoading = false;
@@ -340,11 +334,10 @@
       const title = el("h2", "", data.title);
       title.id = "dialog-title";
       const articles = data.articles || [];
-      const coverage = coverageNames[data.coverage] || "已收录原文";
+      const coverage = "上传文档";
       $("#dialog-kicker").textContent = coverage;
       target.append(title, el("p", "document-meta", `${coverage} · ${articles.length} 条原文 · 版本 ${data.version_id}`));
       if (data.coverage_note) target.append(notice(data.coverage_note));
-      if (data.coverage !== "full_text") target.append(notice("这里展示目前已收录的内容，不代表整部法规全文。"));
       const articleList = el("div", "document-articles");
       for (const article of articles) {
         const section = el("section", "document-article");

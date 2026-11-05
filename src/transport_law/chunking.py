@@ -1,4 +1,4 @@
-"""LangChain 自动分块：输出带来源位置的草稿，不推断法条类型或发布到检索库。"""
+"""LangChain 自动分块：保留原文和来源位置，供上传任务继续向量入库。"""
 
 from __future__ import annotations
 
@@ -6,19 +6,12 @@ import hashlib
 import json
 import re
 from copy import deepcopy
-from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field, model_validator
 
 from transport_law.errors import AppError
-from transport_law.ingest import (
-    LoadedDocument,
-    check_new_output,
-    load_document,
-    to_documents,
-    write_jsonl,
-)
+from transport_law.ingest import LoadedDocument, to_documents
 from transport_law.schemas import Identifier, Model, Text
 
 if TYPE_CHECKING:
@@ -238,36 +231,3 @@ def build_draft_chunks(
     """将提取结果经 Document 分块流程转换为校验后的草稿。"""
     pages = to_documents(document, document_id=document_id, title=title)
     return [DraftChunk.from_document(chunk) for chunk in split_legal_documents(pages, options)]
-
-
-def chunk_document(
-    path: Path,
-    output: Path,
-    *,
-    chunk_size: int = 800,
-    chunk_overlap: int = 120,
-    document_id: str | None = None,
-    title: str | None = None,
-) -> dict:
-    check_new_output(path, output)
-    options = ChunkingOptions(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-    document = load_document(path)
-    chunks = build_draft_chunks(document, options, document_id=document_id, title=title)
-    if not chunks:
-        raise AppError(
-            "no_extractable_text", "未提取到可分块的文字；请检查空文档，扫描 PDF 需先做 OCR。", 400
-        )
-    write_jsonl(output, [chunk.model_dump(mode="json") for chunk in chunks])
-    return {
-        "status": "staged_not_published",
-        "chunk_count": len(chunks),
-        "pdf_page_count": len(document.pages) if document.format == "pdf" else None,
-        "needs_ocr_pages": [
-            page.pdf_page
-            for page in document.pages
-            if page.pdf_page is not None and not page.text.strip()
-        ],
-        "chunking": options.model_dump(),
-        "output": str(output),
-        "notice": "候选分块尚未进入检索库；需核对原文、表格关系、事项分类及来源版本。",
-    }

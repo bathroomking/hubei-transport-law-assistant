@@ -37,20 +37,6 @@ def test_rrf_deduplicates_before_assigning_ranks_and_breaks_ties_by_id(repositor
     assert len(reciprocal_rank_fusion([first, second], [], top_k=1)) == 1
 
 
-class StubDense:
-    def __init__(self):
-        self.scopes = []
-        self.calls = []
-
-    def rank_candidates(self, question, chunks, *, limit, query_vector):
-        assert query_vector == [1.0, 0.0]
-        self.calls.append((question, [chunk.id for chunk in chunks], limit))
-        return [
-            SearchHit(chunk=chunk, score=1 / (index + 1))
-            for index, chunk in enumerate(chunks[:limit])
-        ]
-
-
 class QueryEmbeddings:
     def __init__(self):
         self.queries = []
@@ -60,113 +46,109 @@ class QueryEmbeddings:
         return [1.0, 0.0]
 
 
+class SnapshotStore:
+    def __init__(self, chunks):
+        self.chunks = chunks
+        self.calls = []
+        self.reads = 0
+
+    def ready_chunks(self):
+        self.reads += 1
+        return list(self.chunks)
+
+    def rank_vectors(self, chunks, *, limit, query_vector):
+        assert query_vector == [1.0, 0.0]
+        self.calls.append(([c.id for c in chunks], limit))
+        return [SearchHit(chunk=c, score=1 / (i + 1)) for i, c in enumerate(chunks[:limit])]
+
+
 @pytest.fixture
-def dense(monkeypatch):
-    dense = StubDense()
-
-    def open_index(repository, settings, embedder, *, scope):
-        dense.scopes.append(scope)
-        return dense
-
-    monkeypatch.setattr("transport_law.hybrid.ChromaRetriever", open_index)
-    return dense
+def hybrid(repository, settings):
+    return HybridRetriever(SnapshotStore(repository.all_chunks), settings, QueryEmbeddings())
 
 
-@pytest.fixture
-def hybrid(repository, settings, dense):
-    return HybridRetriever(repository, settings, QueryEmbeddings())
+def test_one_ready_snapshot_and_one_query_embedding_per_search(hybrid):
+    result = hybrid.search("未知语义问题")
+    assert result
+    assert all(h.retrieval.dense_rank for h in result)
+    assert hybrid.knowledge.reads == 1
+    assert len(hybrid.knowledge.calls) == 1
+    assert hybrid.embedder.queries == ["未知语义问题"]
 
 
-@pytest.mark.parametrize(
-    "question",
-    [
-        "道路交通安全法第999条",
-        "湖北公安交管裁量交通管理册第99项",
-    ],
-)
-def test_nonexistent_articles_never_call_embedding(hybrid, dense, question):
-    assert hybrid.search(question) == []
-    assert dense.calls == []
-    assert hybrid.embedder.queries == []
-    assert dense.scopes == []
+def test_exact_uploaded_id_does_not_call_embedding(hybrid):
+    result = hybrid.search("UP-fixture-2", top_k=1)
+    assert [h.chunk.id for h in result] == ["UP-fixture-2"]
+    assert result[0].retrieval is None
+    assert not hybrid.embedder.queries and not hybrid.knowledge.calls
 
 
-@pytest.mark.parametrize("question", ["喝了点酒开车会怎么样？", "个人所得税如何计算？"])
-def test_unrestricted_questions_reach_both_rankers(hybrid, dense, question):
-    assert hybrid.search(question)
-    assert dense.calls[0][1] == [chunk.id for chunk in hybrid.bm25.chunks]
-    assert dense.scopes == [hybrid.bm25]
-    assert hybrid.embedder.queries == [question]
+def test_empty_store_never_calls_embedding_or_dense_index(settings):
+    retriever = HybridRetriever(SnapshotStore([]), settings, QueryEmbeddings())
+    assert retriever.search("施工许可") == []
+    assert not retriever.embedder.queries and not retriever.knowledge.calls
 
 
-def test_explicit_excerpt_id_remains_available_without_embedding(hybrid, dense):
-    hits = hybrid.search("HB-ROAD-003-REG62", top_k=1)
-    assert [hit.chunk.id for hit in hits] == ["HB-ROAD-003-REG62"]
-    assert hits[0].retrieval is None  # ID 直接定位，不冒充 RRF 结果。
-    assert dense.calls == []
-    assert hybrid.embedder.queries == []
-    assert dense.scopes == []
+def test_ready_changes_refresh_bm25_but_identical_snapshot_is_reused(hybrid, repository):
+    hybrid.search("施工许可")
+    before = hybrid._snapshot[1]
+    hybrid.search("安全防护")
+    assert hybrid._snapshot[1] is before
+    added = repository.all_chunks[0].model_copy(
+        update={"id": "UP-added", "text": "新增施工许可", "search_text": "新增施工许可"}
+    )
+    hybrid.knowledge.chunks.append(added)
+    result = hybrid.search("施工许可")
+    assert hybrid._snapshot[1] is not before
+    assert "UP-added" in {h.chunk.id for h in result}
+    hybrid.knowledge.chunks = []
+    assert hybrid.search("施工许可") == []
 
 
-@pytest.mark.parametrize(
-    "question,expected",
-    [
-        ("道路交通安全法第38条", "cn-traffic-safety-2021-A038"),
-        ("道路交通安全法实施条例第38条", "cn-traffic-implementation-2017-A038"),
-        ("湖北道交法实施办法第56条", "hb-traffic-2017-A056"),
-        ("湖北公安交管裁量交通管理册第20项", "hb-police-discretion-2026-T020"),
-    ],
-)
-def test_both_channels_respect_law_article_disambiguation(hybrid, dense, question, expected):
-    assert [hit.chunk.id for hit in hybrid.search(question)] == [expected]
-    assert dense.calls[0][1] == [expected]
-
-
-def test_parallel_channels_share_scope_and_fuse_before_final_top_k(hybrid, dense, monkeypatch):
+def test_parallel_channels_fuse_before_final_top_k(hybrid, repository, monkeypatch):
+    template = repository.all_chunks[0]
+    candidates = [template.model_copy(update={"id": f"UP-test-{n:03}"}) for n in range(60)]
+    hybrid.knowledge.chunks = candidates
+    hybrid.search("初始化快照")
     barrier = threading.Barrier(2)
     calls = {}
-    candidates = hybrid.bm25.candidate_chunks("道路交通安全法")
-    assert len(candidates) > 50
 
-    def channel(name, ordering):
-        def rank(question, chunks, *, limit, query_vector=None):
-            calls[name] = ([c.id for c in chunks], limit)
-            barrier.wait(timeout=5)  # 如果两路改为串行，这里会失败。
-            return [
-                SearchHit(chunk=c, score=1 / (index + 1))
-                for index, c in enumerate(ordering[:limit])
-            ]
+    def sparse(question, chunks, *, limit):
+        calls["sparse"] = ([c.id for c in chunks], limit)
+        barrier.wait(timeout=5)
+        return [SearchHit(chunk=c, score=1 / (i + 1)) for i, c in enumerate(chunks[:limit])]
 
-        return rank
+    def dense(chunks, *, limit, query_vector):
+        calls["dense"] = ([c.id for c in chunks], limit)
+        barrier.wait(timeout=5)
+        return [
+            SearchHit(chunk=candidates[50], score=1),
+            SearchHit(chunk=candidates[19], score=0.9),
+        ]
 
-    # 首位法条仅在一路出现；第 20 位法条在两路出现，应经融合排到前面。
-    sparse = candidates[:50]
-    dense_order = [candidates[50], candidates[19]]
-    monkeypatch.setattr(hybrid.bm25, "rank_candidates", channel("bm25", sparse))
-    monkeypatch.setattr(dense, "rank_candidates", channel("dense", dense_order))
-    hit = hybrid.search("道路交通安全法", top_k=1)[0]
+    monkeypatch.setattr(hybrid._snapshot[1], "rank_candidates", sparse)
+    monkeypatch.setattr(hybrid.knowledge, "rank_vectors", dense)
+    hit = hybrid.search("施工许可", top_k=1)[0]
     assert hit.chunk.id == candidates[19].id
     assert hit.retrieval.bm25_rank == 20 and hit.retrieval.dense_rank == 2
-    assert calls["bm25"] == calls["dense"] == ([c.id for c in candidates], 50)
+    assert calls["sparse"] == calls["dense"] == ([c.id for c in candidates], 50)
 
 
-def test_vector_failure_is_not_silently_reported_as_successful_fusion(hybrid, dense, monkeypatch):
+def test_vector_failure_is_not_silently_reported_as_successful_fusion(hybrid, monkeypatch):
     def fail(*args, **kwargs):
         raise AppError("embedding_timeout", "模拟超时。", 503)
 
-    monkeypatch.setattr(dense, "rank_candidates", fail)
+    monkeypatch.setattr(hybrid.knowledge, "rank_vectors", fail)
     with pytest.raises(AppError) as error:
-        hybrid.search("公路挖沟")
+        hybrid.search("施工许可")
     assert error.value.code == "embedding_timeout"
 
 
 @pytest.mark.parametrize("top_k", [0, 11])
-def test_hybrid_rejects_invalid_limit_before_query(hybrid, dense, top_k):
+def test_hybrid_rejects_invalid_limit_before_query(hybrid, top_k):
     with pytest.raises(ValueError):
-        hybrid.search("公路挖沟", top_k)
-    assert not dense.calls
-    assert not hybrid.embedder.queries
-    assert not dense.scopes
+        hybrid.search("施工许可", top_k)
+    assert not hybrid.knowledge.calls and not hybrid.embedder.queries
 
 
 @pytest.mark.parametrize(
@@ -183,18 +165,23 @@ def test_hybrid_settings_validate_windows(settings, update):
         Settings(_env_file=None, **(settings.model_dump() | update))
 
 
-@pytest.mark.parametrize("backend", ["bm25", "chroma", "hybrid"])
-def test_cli_backend_selection_is_only_available_for_evaluation(backend):
-    assert parser().parse_args(["evaluate", "--backend", backend]).backend == backend
+@pytest.mark.parametrize(
+    "command",
+    [
+        "retrieve",
+        "chat",
+        "check-facts",
+        "evaluate",
+        "validate-data",
+        "index-vectors",
+        "vector-status",
+        "chunk-document",
+        "extract-pdf",
+    ],
+)
+def test_cli_only_exposes_active_serve_and_ask_commands(command):
     with pytest.raises(SystemExit) as exc:
-        parser().parse_args(["ask", "公路挖沟", "--backend", backend])
-    assert exc.value.code == 2
-
-
-@pytest.mark.parametrize("command", ["retrieve", "chat", "check-facts"])
-def test_cli_removes_separate_product_modes(command):
-    with pytest.raises(SystemExit) as exc:
-        parser().parse_args([command, "公路挖沟"])
+        parser().parse_args([command])
     assert exc.value.code == 2
 
 
@@ -214,72 +201,9 @@ def test_cli_ask_uses_shared_runtime_and_preserves_question_and_limit(
 
     monkeypatch.setattr("transport_law.cli.Settings", lambda: settings)
     monkeypatch.setattr("transport_law.cli.build_runtime", runtime)
-    args = parser().parse_args(["ask", "  公路挖沟如何处理？  ", "--top-k", "3"])
-    assert not hasattr(args, "backend")
+    args = parser().parse_args(["ask", "  施工许可如何申请？  ", "--top-k", "3"])
     assert run(args) == 0
-    assert seen[0].question == "公路挖沟如何处理？" and seen[0].top_k == 3
+    assert seen[0].question == "施工许可如何申请？" and seen[0].top_k == 3
     assert json.loads(capsys.readouterr().out)["answer"] == "已根据资料说明。"
-
-
-def test_cli_local_validation_does_not_build_online_runtime(
-    settings, repository, monkeypatch, capsys
-):
-    def unexpected_runtime(*args, **kwargs):
-        pytest.fail("本地资料检查不得初始化在线问答运行时")
-
-    monkeypatch.setattr("transport_law.cli.Settings", lambda: settings)
-    monkeypatch.setattr("transport_law.cli.build_runtime", unexpected_runtime)
-    assert run(parser().parse_args(["validate-data"])) == 0
-    result = json.loads(capsys.readouterr().out)
-    assert result == {"status": "ok", "chunks": len(repository.searchable)}
-
-
-def test_cli_default_evaluation_remains_offline(settings, monkeypatch, capsys, tmp_path):
-    def unexpected_runtime(*args, **kwargs):
-        pytest.fail("检索评估不得初始化在线问答运行时")
-
-    monkeypatch.setattr("transport_law.cli.Settings", lambda: settings)
-    monkeypatch.setattr("transport_law.cli.build_runtime", unexpected_runtime)
-    dataset = tmp_path / "evaluation.jsonl"
-    dataset.write_text(
-        json.dumps(
-            {
-                "id": "article",
-                "question": "公路法第44条",
-                "expected_ids": ["cn-highway-2017-A044"],
-            }
-        ),
-        encoding="utf-8",
-    )
-    assert run(parser().parse_args(["evaluate", "--dataset", str(dataset)])) == 0
-    result = json.loads(capsys.readouterr().out)
-    assert result["backend"] == "bm25"
-    assert result["passed"] == result["total"] > 0
-
-
-@pytest.mark.parametrize("backend", ["chroma", "hybrid"])
-def test_cli_evaluation_uses_independent_retriever(settings, monkeypatch, capsys, backend):
-    selected = []
-
-    class EvaluationRetriever:
-        def __init__(self, repository, config):
-            assert config is settings and repository.searchable
-            selected.append(self)
-
-    def evaluate(dataset, retriever):
-        assert retriever is selected[0]
-        return {"passed": 1, "total": 2}
-
-    def unexpected_runtime(*args, **kwargs):
-        pytest.fail("检索评估不得初始化在线问答运行时")
-
-    target = {
-        "chroma": "transport_law.vector_store.ChromaRetriever",
-        "hybrid": "transport_law.hybrid.HybridRetriever",
-    }[backend]
-    monkeypatch.setattr(target, EvaluationRetriever)
-    monkeypatch.setattr("transport_law.cli.Settings", lambda: settings)
-    monkeypatch.setattr("transport_law.cli.build_runtime", unexpected_runtime)
-    monkeypatch.setattr("transport_law.cli.evaluate_retrieval", evaluate)
-    assert run(parser().parse_args(["evaluate", "--backend", backend])) == 1
-    assert json.loads(capsys.readouterr().out) == {"passed": 1, "total": 2, "backend": backend}
+    with pytest.raises(SystemExit):
+        parser().parse_args(["ask", "施工许可", "--backend", "bm25"])

@@ -1,4 +1,4 @@
-"""小语料 BM25 检索；事项别名是可解释的召回入口，后续可替换为混合检索。"""
+"""BM25 关键词排序及法规、条号、事项的共同范围约束。"""
 
 import math
 import re
@@ -15,7 +15,10 @@ def normalize(text: str) -> str:
 
 
 def tokenize(text: str) -> list[str]:
-    parts = re.findall(r"[\u4e00-\u9fff]+|[a-z0-9]+", normalize(text))
+    normalized = unicodedata.normalize("NFKC", text).lower()
+    # 中文排版空白可以合并；英文单词间空白必须保留，否则 Road permit 变成 roadpermit。
+    normalized = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", normalized)
+    parts = re.findall(r"[\u4e00-\u9fff]+|[a-z0-9]+", normalized)
     tokens = []
     for part in parts:
         if re.fullmatch(r"[a-z0-9]+", part):
@@ -37,7 +40,7 @@ class BM25Retriever:
         excerpt_ids = {ident for chunk in all_chunks for ident in chunk.related_excerpt_ids}
         # 法规全文优先于裁量表重复引用；原节选仍可按 ID 读取，也仍供裁量规则追溯。
         self.chunks = [chunk for chunk in all_chunks if chunk.id not in excerpt_ids]
-        self.terms = [Counter(tokenize(c.search_text + c.text)) for c in self.chunks]
+        self.terms = [Counter(tokenize(c.search_text + "\n" + c.text)) for c in self.chunks]
         self.lengths = [sum(terms.values()) for terms in self.terms]
         self.average_length = sum(self.lengths) / max(1, len(self.lengths)) or 1
         self.document_frequency = Counter(term for terms in self.terms for term in terms)
@@ -109,8 +112,16 @@ class BM25Retriever:
         explicit = self.explicit_chunks(question)
         if explicit:
             return [SearchHit(chunk=chunk, score=1000) for chunk in explicit[:top_k]]
+        return self.rank_candidates(question, self.candidate_chunks(question), limit=top_k)
+
+    def rank_candidates(
+        self, question: str, chunks: list[LegalChunk], *, limit: int
+    ) -> list[SearchHit]:
+        """内部召回窗口可大于 API 的 top_k，供混合检索在截断前融合。"""
+        if not 1 <= limit <= 200:
+            raise ValueError("候选数量必须在 1 到 200 之间")
         normalized_question = normalize(question)
-        candidates = {chunk.id for chunk in self.candidate_chunks(question)}
+        candidates = {chunk.id for chunk in chunks}
         query_terms = set(tokenize(question))
         hits = []
         count = len(self.chunks)
@@ -141,4 +152,4 @@ class BM25Retriever:
                 alias_bonus += 100
             # 没有匹配口语词的同事项记录仍作为关联依据保留。
             hits.append(SearchHit(chunk=chunk, score=round(score + alias_bonus + 1, 6)))
-        return sorted(hits, key=lambda hit: (-hit.score, hit.chunk.id))[:top_k]
+        return sorted(hits, key=lambda hit: (-hit.score, hit.chunk.id))[:limit]

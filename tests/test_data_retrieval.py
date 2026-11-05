@@ -10,7 +10,7 @@ from transport_law.errors import AppError
 from transport_law.evaluation import evaluate_retrieval
 from transport_law.ingest import extract_pdf
 from transport_law.repository import LawRepository
-from transport_law.retrieval import BM25Retriever
+from transport_law.retrieval import BM25Retriever, tokenize
 from transport_law.schemas import SearchRequest
 
 
@@ -19,6 +19,11 @@ def test_regression_dataset(retriever):
     assert report["total"] == 20
     assert report["passed"] == report["total"], report["results"]
     assert report["recall_at_k"] == 1
+
+
+def test_tokenization_preserves_english_word_boundaries_and_chinese_layout():
+    assert tokenize("Road permit\nrequired") == ["road", "permit", "required"]
+    assert tokenize("公 路\n许可") == tokenize("公路许可")
 
 
 @pytest.mark.parametrize(

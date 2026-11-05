@@ -82,9 +82,21 @@ class SearchRequest(Model):
     top_k: int | None = Field(default=None, ge=1, le=10)
 
 
+class HybridScore(Model):
+    """两路候选列表中的父法条排名；RRF 分数不是相关概率。"""
+
+    method: Literal["rrf"] = "rrf"
+    rrf_k: int = Field(ge=1)
+    bm25_rank: int | None = Field(default=None, ge=1)
+    dense_rank: int | None = Field(default=None, ge=1)
+    bm25_score: float | None = None
+    dense_score: float | None = None
+
+
 class SearchHit(Model):
     chunk: LegalChunk
     score: float
+    retrieval: HybridScore | None = None
 
 
 class SearchResponse(Model):

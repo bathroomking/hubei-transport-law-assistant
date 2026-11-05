@@ -12,7 +12,7 @@ from transport_law.embeddings import DashScopeEmbeddings, Embeddings
 from transport_law.errors import AppError
 from transport_law.repository import LawRepository
 from transport_law.retrieval import BM25Retriever
-from transport_law.schemas import SearchHit
+from transport_law.schemas import LegalChunk, SearchHit
 
 
 def digest(value) -> str:
@@ -262,9 +262,14 @@ def open_vector_index(settings: Settings, repository: LawRepository):
 
 class ChromaRetriever:
     def __init__(
-        self, repository: LawRepository, settings: Settings, embedder: Embeddings | None = None
+        self,
+        repository: LawRepository,
+        settings: Settings,
+        embedder: Embeddings | None = None,
+        *,
+        scope: BM25Retriever | None = None,
     ):
-        self.scope = BM25Retriever(repository)
+        self.scope = scope or BM25Retriever(repository)
         self.collection = open_vector_index(settings, repository)
         self.embedder = embedder or DashScopeEmbeddings(settings)
 
@@ -274,20 +279,28 @@ class ChromaRetriever:
         explicit = self.scope.explicit_chunks(question)
         if explicit:
             return [SearchHit(chunk=chunk, score=1.0) for chunk in explicit[:top_k]]
-        parents = {chunk.id: chunk for chunk in self.scope.candidate_chunks(question)}
+        return self.rank_candidates(question, self.scope.candidate_chunks(question), limit=top_k)
+
+    def rank_candidates(
+        self, question: str, chunks: list[LegalChunk], *, limit: int
+    ) -> list[SearchHit]:
+        """先聚合子块为父法条，再按父法条数量截取召回窗口。"""
+        if not 1 <= limit <= 200:
+            raise ValueError("候选数量必须在 1 到 200 之间")
+        parents = {chunk.id: chunk for chunk in chunks}
         if not parents:
             return []
         vector = self.embedder.embed_query(question)
         with chroma_errors():
             where = {"parent_id": {"$in": list(parents)}}
             count = len(self.collection.get(where=where, include=[])["ids"])
-            limit = min(count, top_k * 4)
-            if not limit:
+            child_limit = min(count, limit * 4)
+            if not child_limit:
                 raise AppError("vector_index_incomplete", "候选法条缺少向量记录。", 503)
             while True:
                 result = self.collection.query(
                     query_embeddings=[vector],
-                    n_results=limit,
+                    n_results=child_limit,
                     where=where,
                     include=["metadatas", "distances"],
                 )
@@ -300,7 +313,7 @@ class ChromaRetriever:
                         hits[ident] = SearchHit(
                             chunk=parents[ident], score=round(1.0 - distance, 6)
                         )
-                if len(hits) >= top_k or limit >= count:
-                    return sorted(hits.values(), key=lambda h: (-h.score, h.chunk.id))[:top_k]
+                if len(hits) >= limit or child_limit >= count:
+                    return sorted(hits.values(), key=lambda h: (-h.score, h.chunk.id))[:limit]
                 # 一个长法条可能拆成很多子块，扩大候选直到得到足够的不同父法条。
-                limit = min(count, limit * 2)
+                child_limit = min(count, child_limit * 2)

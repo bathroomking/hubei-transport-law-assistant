@@ -19,7 +19,11 @@ class Runtime:
 def build_runtime(settings: Settings | None = None, llm: LanguageModel | None = None) -> Runtime:
     settings = settings or Settings()
     repository = LawRepository.from_jsonl(settings.law_data_path)
-    if settings.retrieval_backend == "chroma":
+    if settings.retrieval_backend == "hybrid":
+        from transport_law.hybrid import HybridRetriever
+
+        retriever = HybridRetriever(repository, settings)
+    elif settings.retrieval_backend == "chroma":
         from transport_law.vector_store import ChromaRetriever
 
         retriever = ChromaRetriever(repository, settings)

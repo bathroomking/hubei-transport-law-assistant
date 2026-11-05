@@ -139,12 +139,23 @@ def test_duplicate_name_is_rejected_without_reprocessing_even_after_restart(uplo
             assert len(client.get(f"{BASE}/documents").json()) == 1
 
 
-def test_new_document_only_embeds_new_chunks_and_is_visible_without_restart(upload_setup):
+@pytest.mark.parametrize("backend", ["bm25", "chroma", "hybrid"])
+def test_new_document_only_embeds_new_chunks_and_is_visible_without_restart(upload_setup, backend):
     settings, embedder = upload_setup
+    settings = settings.model_copy(update={"knowledge_retrieval_backend": backend})
     with TestClient(create_app(settings)) as client:
+        assert client.get("/health").json()["knowledge_retrieval_backend"] == backend
+        assert client.post(f"{BASE}/retrieve", json={"question": "document"}).json()["hits"] == []
         for name, text in [("one.txt", b"First document."), ("two.md", b"Second document.")]:
             response = client.post(f"{BASE}/documents", files={"file": (name, text)})
             assert response.status_code == 202
+            # 查询后再追加，BM25 不得一直使用第一次请求的过期快照。
+            result = client.post(f"{BASE}/retrieve", json={"question": "document", "top_k": 5})
+            hits = result.json()["hits"]
+            assert any(hit["chunk"]["source"]["file"] == name for hit in hits)
+            if backend == "hybrid":
+                assert all(hit["retrieval"]["bm25_rank"] for hit in hits)
+                assert all(hit["retrieval"]["dense_rank"] for hit in hits)
         assert len(embedder.calls) == 2
         assert len(embedder.successful_texts) == 2
         result = client.post(f"{BASE}/retrieve", json={"question": "document", "top_k": 5})
@@ -152,6 +163,7 @@ def test_new_document_only_embeds_new_chunks_and_is_visible_without_restart(uplo
             "one.txt",
             "two.md",
         }
+        assert len(embedder.queries) == (0 if backend == "bm25" else 3)
 
 
 def test_filename_of_existing_curated_source_is_also_reserved(upload_setup, repository):
@@ -308,8 +320,10 @@ def test_restart_reads_ready_documents_without_chunking_or_embedding(upload_setu
         assert client.get("/health").status_code == 200
 
 
-def test_partial_failed_vectors_do_not_hide_ready_document(upload_setup):
+@pytest.mark.parametrize("backend", ["bm25", "chroma", "hybrid"])
+def test_partial_failed_vectors_do_not_hide_ready_document(upload_setup, backend):
     settings, embedder = upload_setup
+    settings = settings.model_copy(update={"knowledge_retrieval_backend": backend})
     embedder.fail_on_call = 2
     text = "\n".join(f"# Section {number}\nUnfinished permit {number}." for number in range(7))
     with TestClient(create_app(settings)) as client:
@@ -401,8 +415,10 @@ def test_interrupted_task_requires_explicit_retry_and_reuses_saved_chunks(
     assert len(embedder.calls) == 1
 
 
-def test_uploaded_qa_uses_stored_sources_and_rejects_invented_citations(upload_setup):
+@pytest.mark.parametrize("backend", ["chroma", "hybrid"])
+def test_uploaded_qa_uses_stored_sources_and_rejects_invented_citations(upload_setup, backend):
     settings, _ = upload_setup
+    settings = settings.model_copy(update={"knowledge_retrieval_backend": backend})
 
     class FakeLLM:
         forged = False

@@ -19,6 +19,8 @@ def settings(monkeypatch, tmp_path):
         "DISCRETION_DATA_PATH",
         "RETRIEVAL_TOP_K",
         "RETRIEVAL_BACKEND",
+        "HYBRID_CANDIDATE_K",
+        "HYBRID_RRF_K",
         "DASHSCOPE_API_KEY",
         "DASHSCOPE_BASE_URL",
         "EMBEDDING_MODEL",
@@ -31,6 +33,7 @@ def settings(monkeypatch, tmp_path):
         "CHROMA_COLLECTION",
         "KNOWLEDGE_PATH",
         "KNOWLEDGE_COLLECTION",
+        "KNOWLEDGE_RETRIEVAL_BACKEND",
         "UPLOAD_MAX_BYTES",
     ):
         monkeypatch.delenv(key, raising=False)

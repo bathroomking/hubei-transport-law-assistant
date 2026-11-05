@@ -27,7 +27,7 @@ def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="湖北交通运输法规与裁量助手")
     commands = root.add_subparsers(dest="command", required=True)
     for name, help_text in (
-        ("retrieve", "检索原文；BM25 离线，Chroma 会调用在线向量模型"),
+        ("retrieve", "检索原文；BM25 离线，Chroma / hybrid 会调用在线向量模型"),
         ("ask", "检索并调用 DeepSeek 生成有引用的解释"),
         ("chat", "单独检查 DeepSeek 模型连接，会使用 API 额度"),
     ):
@@ -35,7 +35,7 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("question")
         if name != "chat":
             command.add_argument("--top-k", type=int, default=None)
-            command.add_argument("--backend", choices=["bm25", "chroma"])
+            command.add_argument("--backend", choices=["bm25", "chroma", "hybrid"])
     serve = commands.add_parser("serve", help="启动本地前端、API 和 /docs")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
@@ -57,9 +57,11 @@ def parser() -> argparse.ArgumentParser:
     )
     index.add_argument("--dry-run", action="store_true", help="仅本地预检，不调用模型或写入索引")
     commands.add_parser("vector-status", help="校验本地向量索引和当前配置，不调用模型")
-    evaluate = commands.add_parser("evaluate", help="运行检索回归集；Chroma 模式会调用向量模型")
+    evaluate = commands.add_parser(
+        "evaluate", help="运行检索回归集；Chroma / hybrid 会调用向量模型"
+    )
     evaluate.add_argument("--dataset", type=Path, default=PROJECT_ROOT / "evals/retrieval.jsonl")
-    evaluate.add_argument("--backend", choices=["bm25", "chroma"])
+    evaluate.add_argument("--backend", choices=["bm25", "chroma", "hybrid"])
     facts = commands.add_parser("check-facts", help="读取案件 JSON，检查缺失事实和规则核验状态")
     facts.add_argument("path", type=Path)
     return root

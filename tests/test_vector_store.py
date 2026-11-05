@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from transport_law.cli import parser, run
 from transport_law.embeddings import DashScopeEmbeddings
 from transport_law.errors import AppError
+from transport_law.hybrid import HybridRetriever
 from transport_law.llm import Completion
 from transport_law.main import create_app
 from transport_law.repository import LawRepository
@@ -264,7 +265,8 @@ def test_changed_corpus_and_changed_chunk_ids_require_new_collection(vector_fixt
     assert error.value.code == "vector_index_mismatch"
 
 
-def test_api_uses_chroma_and_keeps_citation_validation(vector_fixture, monkeypatch):
+@pytest.mark.parametrize("backend", ["chroma", "hybrid"])
+def test_api_uses_vectors_and_keeps_citation_validation(vector_fixture, monkeypatch, backend):
     settings, repository, path = vector_fixture
     embedder = FakeEmbeddings()
     build_vector_index(settings, repository, path, embedder=embedder)
@@ -288,19 +290,36 @@ def test_api_uses_chroma_and_keeps_citation_validation(vector_fixture, monkeypat
 
     llm = FakeLLM()
     with TestClient(
-        create_app(settings.model_copy(update={"retrieval_backend": "chroma"}), llm)
+        create_app(settings.model_copy(update={"retrieval_backend": backend}), llm)
     ) as c:
-        assert c.get("/health").json()["retrieval_backend"] == "chroma"
+        assert c.get("/health").json()["retrieval_backend"] == backend
         request = {"question": "公路挖沟有哪些依据？", "top_k": 2}
-        assert (
-            c.post("/api/v1/retrieve", json=request).json()["hits"][0]["chunk"]["id"] == "test-A001"
-        )
+        hits = c.post("/api/v1/retrieve", json=request).json()["hits"]
+        assert hits[0]["chunk"]["id"] == "test-A001"
+        if backend == "hybrid":
+            assert hits[0]["retrieval"]["method"] == "rrf"
+            assert hits[0]["retrieval"]["dense_rank"] == 1
         answer = c.post("/api/v1/ask", json=request).json()
         assert answer["sources"][0] == repository.get_article("test-A001").model_dump(mode="json")
         assert answer["applicability_status"] == "not_verified"
         llm.citation = "invented-source"
         invalid = c.post("/api/v1/ask", json=request)
         assert invalid.json()["error"]["code"] == "invalid_citation"
+
+
+def test_hybrid_reuses_index_and_deduplicates_long_parent_before_rrf(vector_fixture):
+    settings, repository, path = vector_fixture
+    embedder = FakeEmbeddings()
+    build_vector_index(settings, repository, path, embedder=embedder)
+    embedded_batches = len(embedder.documents)
+    for _ in range(2):
+        retriever = HybridRetriever(repository, settings, embedder)
+        hits = retriever.search("公路挖沟", top_k=2)
+        assert {hit.chunk.id for hit in hits} == {"test-A001", "test-A002"}
+        assert {hit.retrieval.dense_rank for hit in hits} == {1, 2}
+        assert all(hit.chunk == repository.get_article(hit.chunk.id) for hit in hits)
+    assert len(embedder.documents) == embedded_batches  # 重启只读已有向量。
+    assert embedder.queries == ["公路挖沟", "公路挖沟"]
 
 
 def test_cli_preflight_works_without_key_or_chroma_runtime(vector_fixture, monkeypatch, capsys):

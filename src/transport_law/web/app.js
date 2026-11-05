@@ -487,9 +487,9 @@
       $("#backend-status").textContent = data.status === "ok" ? "运行正常" : "状态异常";
       $("#health-checked-at").textContent = `更新于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
       $("#health-model").textContent = data.llm_model;
-      $("#retrieval-mode").textContent = data.retrieval_backend === "chroma"
-        ? (data.embedding_configured ? "在线向量检索" : "在线向量检索 · 未配置密钥")
-        : "本地 BM25 · 离线可用";
+      const retrievalMode = { bm25: "本地 BM25 · 离线可用", chroma: "在线向量检索", hybrid: "混合检索 · BM25 + 向量 + RRF" };
+      $("#retrieval-mode").textContent = (retrievalMode[data.retrieval_backend] || "未知检索模式")
+        + (data.retrieval_backend !== "bm25" && !data.embedding_configured ? " · 未配置密钥" : "");
       $("#status-model-badge").textContent = data.llm_configured ? "密钥已配置" : "未配置密钥";
       $("#status-model-badge").className = `badge ${data.llm_configured ? "green" : "amber"}`;
       $("#model-config-label").textContent = data.llm_configured ? "密钥已配置" : "尚未配置密钥";

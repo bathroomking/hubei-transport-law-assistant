@@ -17,6 +17,8 @@ from typing import BinaryIO
 from transport_law.config import Settings
 from transport_law.embeddings import DashScopeEmbeddings, Embeddings
 from transport_law.errors import AppError
+from transport_law.repository import LawRepository
+from transport_law.retrieval import BM25Retriever
 from transport_law.schemas import LegalChunk, SearchHit, Source
 from transport_law.vector_store import check_contract, chroma_client, chroma_errors, digest
 
@@ -487,20 +489,54 @@ class KnowledgeStore:
         ready = self._ready()
         if not ready:
             return []
+        document_ids = {row["id"] for row in ready}
+        # 固定本次查询的 ready 快照；下一次请求即能看到刚完成的新文档。
+        chunks = [chunk for chunk in self.searchable if chunk.document_id in document_ids]
+        count = sum(row["chunk_count"] for row in ready)
+        if len(chunks) != count:
+            raise AppError("vector_index_incomplete", "上传资料正文缺失，请检查本地索引。", 503)
+        bm25 = BM25Retriever(LawRepository(chunks))
+        explicit = bm25.explicit_chunks(question)
+        if explicit:
+            return [SearchHit(chunk=chunk, score=1000) for chunk in explicit[:top_k]]
+        backend = self.settings.knowledge_retrieval_backend
+        if backend == "bm25":
+            return bm25.rank_candidates(question, chunks, limit=top_k)
+        limit = self.settings.hybrid_candidate_k if backend == "hybrid" else top_k
+
+        def dense():
+            return self._rank_vectors(question, chunks, document_ids, limit=limit)
+
+        if backend == "chroma":
+            return dense()
+        from transport_law.hybrid import fuse_rankers
+
+        # 通用上传资料尚无可靠的法规/事项标签，因此两路都搜索全部 ready 片段。
+        return fuse_rankers(
+            lambda: bm25.rank_candidates(question, chunks, limit=limit),
+            dense,
+            top_k=top_k,
+            rrf_k=self.settings.hybrid_rrf_k,
+        )
+
+    def _rank_vectors(
+        self, question: str, chunks: list[LegalChunk], document_ids: set[str], *, limit: int
+    ) -> list[SearchHit]:
+        by_id = {chunk.id: chunk for chunk in chunks}
         with chroma_errors():
             collection = self._collection()
-            where = {"document_id": {"$in": [row["id"] for row in ready]}}
-            count = sum(row["chunk_count"] for row in ready)
-            if len(collection.get(where=where, include=[])["ids"]) != count:
+            where = {"document_id": {"$in": sorted(document_ids)}}
+            if set(collection.get(where=where, include=[])["ids"]) != set(by_id):
                 raise AppError("vector_index_incomplete", "上传资料向量缺失，请检查本地索引。", 503)
             vector = self.embedder.embed_query(question)
             result = collection.query(
                 query_embeddings=[vector],
-                n_results=min(top_k, count),
+                n_results=min(limit, len(chunks)),
                 where=where,
                 include=["metadatas", "distances"],
             )
-            return [
-                SearchHit(chunk=self.get_article(ident), score=round(1.0 - distance, 6))
+            hits = [
+                SearchHit(chunk=by_id[ident], score=round(1.0 - distance, 6))
                 for ident, distance in zip(result["ids"][0], result["distances"][0], strict=True)
             ]
+            return sorted(hits, key=lambda hit: (-hit.score, hit.chunk.id))

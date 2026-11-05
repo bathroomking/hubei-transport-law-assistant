@@ -25,11 +25,13 @@ python -m transport_law serve
 | `GET /api/v1/knowledge/documents` | 列出上传记录及处理状态 |
 | `GET /api/v1/knowledge/documents/{id}` | 查看一份文档的状态、分块数、已写向量数和错误信息 |
 | `POST /api/v1/knowledge/documents/{id}/retry` | 恢复失败或已中断任务；返回 `202`，复用已保存的分块及成功批次 |
-| `POST /api/v1/knowledge/retrieve` | 在已完成的上传文档中进行向量检索，返回原文和来源 |
+| `POST /api/v1/knowledge/retrieve` | 在已完成的上传文档中检索，支持 BM25、向量或 RRF 混合，返回原文和来源 |
 | `GET /api/v1/knowledge/chunks/{chunk_id}` | 按 ID 查看一条已完成入库的上传片段 |
 | `POST /api/v1/knowledge/ask` | 检索上传资料，再由 DeepSeek 生成带引用的解释 |
 
 `retrieve` 和 `ask` 接收 `{"question": "问题", "top_k": 5}`，`top_k` 为 1–10。原资料库与上传库的检索分数不直接混合；上传库目前没有经过真实业务数据标定的相似度拒答阈值。
+
+可在 `.env` 设置 `KNOWLEDGE_RETRIEVAL_BACKEND=hybrid` 并重启服务，启用 BM25 + 向量 + RRF；默认保持 `chroma`，也支持 `bm25` 离线检索已有 `ready` 片段。两路都搜索全部已完成片段，新文档变为 `ready` 后下一次请求即可召回，不重新生成已有文档向量。正式法规由独立的 `RETRIEVAL_BACKEND` 控制。算法、候选窗口和排名字段见 [混合检索说明](hybrid-retrieval.md)。
 
 ## 一次完整调用
 

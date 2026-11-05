@@ -2,7 +2,7 @@
 
 围绕湖北交通执法学习 RAG 和智能体开发的 Python 项目。已收录 16 部法规、规章的 1,280 条正文，以及湖北公安裁量总则 22 条、交通管理册 29 项，连同原裁量资料共 1,336 条；配置 DeepSeek 后可生成带引用的解释。裁量事实检查仍限普通公路“擅自占用、挖掘公路”。资料目录及全文见 [湖北交通法律法规资料库](docs/legal-sources.md)。
 
-当前技术栈：**Python 3.11+（本地验证为 3.12）＋ FastAPI ＋ HTTPX/DeepSeek ＋ JSONL ＋ 本地 BM25**，可选 **LangChain Text Splitters** 自动分块，以及 **阿里云百炼 text-embedding-v4 ＋ ChromaDB** 向量检索。检索、数据、模型调用和规则检查分层。
+当前技术栈：**Python 3.11+（本地验证为 3.12）＋ FastAPI ＋ HTTPX/DeepSeek ＋ JSONL ＋ 本地 BM25**，可选 **LangChain Text Splitters** 自动分块，以及 **阿里云百炼 text-embedding-v4 ＋ ChromaDB** 向量检索，支持 **BM25 + 向量 + RRF** 混合检索。检索、数据、模型调用和规则检查分层。
 
 ## 当前能做什么
 
@@ -11,6 +11,7 @@
 | 法规资料 | 交通运输与公安交管共 17 份整理文档；法规、规章全文 1,280 条，公安裁量总则 22 条及交通册 29 项，另保留原上传 5 条记录；有来源快照和版本说明 |
 | 独立检索 | 中文 BM25、事项别名、法规名称与条号定位；完整法条优先于重复节选，区分国家和湖北的同名法规 |
 | 向量检索 | 可选 百炼 text-embedding-v4 在线向量化，Chroma 本地持久化；分批入库、重复跳过、断点续传、子块回填父法条 |
+| 混合检索 | BM25 与向量并行召回，按父法条去重后用 RRF 融合；记录两路排名，保留精确条号和出处约束 |
 | RAG 问答 | 检索 → DeepSeek JSON 回复 → 引用 ID 校验 → 后端回填原文和出处 |
 | 模型错误处理 | 缺 Key、认证失败、余额不足、限流、网络失败、总超时、空回复、截断、非法 JSON |
 | 裁量辅助 | 结构化事实输入、缺失字段追问、地域/道路类型检查、边界复核提醒 |
@@ -100,11 +101,12 @@ python -m transport_law index-vectors \
   --documents data/staging/document_batch_20261104/langchain_documents.jsonl
 python -m transport_law vector-status
 python -m transport_law retrieve "公路挖沟有哪些依据？" --backend chroma
+python -m transport_law retrieve "公路挖沟有哪些依据？" --backend hybrid
 ```
 
 `--dry-run` 不需要密钥、不写数据库。正式入库和 Chroma 语义查询会调用阿里云百炼 并使用额度；不调用 DeepSeek。已有批次含 1,338 个子块，对应 1,336 个父记录。数据库默认保存在 Git 忽略的 `data/local/chroma/`。命令不会自动修改 `.env` 或切换默认检索。
 
-入库完成后，可在 `.env` 设置 `RETRIEVAL_BACKEND=chroma` 并重启服务，让网页、API 和问答使用向量检索；`--backend bm25` 可单次使用原基线。首次接入采用相同的法规名称、条号和事项范围约束，只替换候选内排序。配置、续传、模型更换和评测方法见 [向量检索说明](docs/vector-retrieval.md)。
+入库完成后，可在 `.env` 设置 `RETRIEVAL_BACKEND=hybrid`（BM25 + 向量 + RRF）或 `chroma`（纯向量）并重启服务；`--backend bm25` 可单次使用原基线。两路使用相同的法规名称、条号和事项范围约束。现有 70 题实测 BM25 通过 70、Chroma 通过 65、混合通过 68，因此正式法规默认保留 BM25。配置与结果见 [混合检索说明](docs/hybrid-retrieval.md)，入库、续传和模型更换见 [向量检索说明](docs/vector-retrieval.md)。
 
 ## 3. 启动前端与接口
 
@@ -128,9 +130,9 @@ python -m transport_law serve --reload
 | 接口 | 用途 | 需要 Key |
 | --- | --- | --- |
 | `GET /health` | 数据数量和本地配置状态 | 否 |
-| `POST /api/v1/retrieve` | 原文检索 | BM25 不需要；Chroma 语义查询需要 百炼 API Key |
+| `POST /api/v1/retrieve` | 原文检索 | BM25 不需要；Chroma / hybrid 语义查询需要百炼 API Key |
 | `GET /api/v1/articles/{chunk_id}` | 读取一条完整记录 | 否 |
-| `POST /api/v1/ask` | 带引用解释 | 命中资料后需要 DeepSeek Key；Chroma 查询还需要 百炼 API Key |
+| `POST /api/v1/ask` | 带引用解释 | 命中资料后需要 DeepSeek Key；Chroma / hybrid 查询还需要百炼 API Key |
 | `GET /api/v1/discretion/{item_id}` | 查看裁量规则草稿 | 否 |
 | `POST /api/v1/discretion/check` | 缺失事实和复核事项检查 | 否 |
 | `POST /api/v1/knowledge/documents` | 上传 PDF/TXT/Markdown；后台切分并写入上传知识库 | 百炼 API Key |
@@ -178,6 +180,7 @@ src/transport_law/
   retrieval.py     事项召回与 BM25 排序（不调用模型）
   embeddings.py    阿里云百炼 在线向量接口、校验和重试
   vector_store.py  Chroma 持久化、断点续传与父法条回填
+  hybrid.py        BM25 与向量并行召回、RRF 排名融合
   knowledge.py     上传登记、同名检查、后台分块入库及上传库检索
   llm.py           DeepSeek HTTP 请求、超时和错误处理
   prompts.py       有证据的解释提示词
@@ -203,7 +206,7 @@ docs/              架构、数据整理和后续计划
 
 ```mermaid
 flowchart LR
-  A[用户问题] --> B[范围约束 + BM25 或 Chroma 向量排序]
+  A[用户问题] --> B[范围约束 + BM25 / Chroma / 混合 RRF]
   B --> C{有候选依据?}
   C -- 否 --> D[返回依据不足]
   C -- 是 --> E[DeepSeek 结构化解释]

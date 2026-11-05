@@ -83,6 +83,7 @@ def create_app(settings: Settings | None = None, llm: LanguageModel | None = Non
             "llm_model": runtime.settings.deepseek_model,
             "llm_connectivity": "not_checked",
             "retrieval_backend": runtime.settings.retrieval_backend,
+            "knowledge_retrieval_backend": runtime.settings.knowledge_retrieval_backend,
             "embedding_configured": runtime.settings.embedding_configured,
             "embedding_model": runtime.settings.embedding_model,
             "embedding_connectivity": "not_checked",

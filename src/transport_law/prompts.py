@@ -1,3 +1,7 @@
+import json
+
+from transport_law.schemas import LegalChunk
+
 INSUFFICIENT_ANSWER = "现有资料不足，无法回答这个问题。"
 
 QA_TEMPLATE = """Context:
@@ -53,3 +57,25 @@ source_type 为 pdf 的证据按真实 PDF 页码定位。不要替网页资料�
 claims 最多 8 项，follow_up_questions 最多 8 项。不要在 text 中自行输出原文引用块或来源链接，
 后端会根据 citation_ids 回填真实原文与页码。JSON 中不得包含 Markdown 代码围栏。
 """
+
+
+def build_qa_messages(question: str, source_documents: list[LegalChunk]) -> list[dict[str, str]]:
+    """按检索排名完整拼接原文；正文和问题均编码为 JSON 数据。"""
+    if not source_documents:
+        raise ValueError("问答需要至少一条检索原文")
+    context = [
+        document.model_dump(
+            mode="json",
+            exclude={"search_text", "aliases", "document_aliases", "related_excerpt_ids"},
+        )
+        for document in source_documents
+    ]
+    # 一次插值，原文或问题中的花括号不会再次被解释为模板。
+    prompt = QA_TEMPLATE.format(
+        context=json.dumps(context, ensure_ascii=False, indent=2),
+        question=json.dumps(question, ensure_ascii=False),
+    )
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ]

@@ -22,7 +22,7 @@ BASE = "/api/v1/knowledge"
 
 
 def uploaded_retriever(client):
-    store = client.app.state.knowledge
+    store = client.app.state.runtime.knowledge
     return UnifiedRetriever(LawRepository([]), store, store.settings, store.embedder)
 
 
@@ -443,7 +443,7 @@ def test_uploaded_qa_uses_stored_sources_and_rejects_invented_citations(upload_s
     llm = FakeLLM()
     with TestClient(create_app(settings, llm)) as client:
         client.app.state.runtime.service.retriever = uploaded_retriever(client)
-        assert client.app.state.runtime.knowledge is client.app.state.knowledge
+        assert client.app.state.runtime.repository.knowledge is client.app.state.runtime.knowledge
         assert (
             client.post(
                 f"{BASE}/documents", files={"file": ("source.txt", "施工前需办理许可。".encode())}

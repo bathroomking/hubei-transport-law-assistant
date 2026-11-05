@@ -15,7 +15,7 @@ from transport_law.errors import AppError
 from transport_law.ingest import (
     LoadedDocument,
     check_new_output,
-    load_documents,
+    load_document,
     to_documents,
     write_jsonl,
 )
@@ -235,7 +235,7 @@ def build_draft_chunks(
     document_id: str | None = None,
     title: str | None = None,
 ) -> list[DraftChunk]:
-    """兼容已有提取结果的入口；实际分块统一通过 Document 流程。"""
+    """将提取结果经 Document 分块流程转换为校验后的草稿。"""
     pages = to_documents(document, document_id=document_id, title=title)
     return [DraftChunk.from_document(chunk) for chunk in split_legal_documents(pages, options)]
 
@@ -251,10 +251,8 @@ def chunk_document(
 ) -> dict:
     check_new_output(path, output)
     options = ChunkingOptions(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-    documents = load_documents(path, document_id=document_id, title=title)
-    chunks = [
-        DraftChunk.from_document(chunk) for chunk in split_legal_documents(documents, options)
-    ]
+    document = load_document(path)
+    chunks = build_draft_chunks(document, options, document_id=document_id, title=title)
     if not chunks:
         raise AppError(
             "no_extractable_text", "未提取到可分块的文字；请检查空文档，扫描 PDF 需先做 OCR。", 400
@@ -263,13 +261,11 @@ def chunk_document(
     return {
         "status": "staged_not_published",
         "chunk_count": len(chunks),
-        "pdf_page_count": (
-            len(documents) if documents[0].metadata["source"]["format"] == "pdf" else None
-        ),
+        "pdf_page_count": len(document.pages) if document.format == "pdf" else None,
         "needs_ocr_pages": [
-            page.metadata["pdf_page"]
-            for page in documents
-            if page.metadata["pdf_page"] is not None and not page.page_content.strip()
+            page.pdf_page
+            for page in document.pages
+            if page.pdf_page is not None and not page.text.strip()
         ],
         "chunking": options.model_dump(),
         "output": str(output),

@@ -1,4 +1,5 @@
 import pytest
+from pydantic import SecretStr
 
 from transport_law.config import Settings
 from transport_law.repository import LawRepository
@@ -16,7 +17,6 @@ def settings(monkeypatch, tmp_path):
         "DEEPSEEK_MAX_RETRIES",
         "DEEPSEEK_MAX_TOKENS",
         "LAW_DATA_PATH",
-        "DISCRETION_DATA_PATH",
         "RETRIEVAL_TOP_K",
         "HYBRID_CANDIDATE_K",
         "HYBRID_RRF_K",
@@ -36,6 +36,17 @@ def settings(monkeypatch, tmp_path):
     ):
         monkeypatch.delenv(key, raising=False)
     return Settings(_env_file=None, knowledge_path=tmp_path / "knowledge")
+
+
+@pytest.fixture
+def online_settings(settings):
+    return settings.model_copy(
+        update={
+            "deepseek_api_key": SecretStr("test-deepseek-key"),
+            "dashscope_api_key": SecretStr("test-dashscope-key"),
+            "retrieval_top_k": 3,
+        }
+    )
 
 
 @pytest.fixture

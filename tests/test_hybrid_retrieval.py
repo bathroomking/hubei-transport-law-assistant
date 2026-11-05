@@ -186,7 +186,9 @@ def test_cli_ask_uses_shared_runtime_and_preserves_question_and_limit(
     assert json.loads(capsys.readouterr().out)["answer"] == "已根据资料说明。"
 
 
-def test_cli_local_validation_does_not_build_online_runtime(settings, monkeypatch, capsys):
+def test_cli_local_validation_does_not_build_online_runtime(
+    settings, repository, monkeypatch, capsys
+):
     def unexpected_runtime(*args, **kwargs):
         pytest.fail("本地资料检查不得初始化在线问答运行时")
 
@@ -194,8 +196,7 @@ def test_cli_local_validation_does_not_build_online_runtime(settings, monkeypatc
     monkeypatch.setattr("transport_law.cli.build_runtime", unexpected_runtime)
     assert run(parser().parse_args(["validate-data"])) == 0
     result = json.loads(capsys.readouterr().out)
-    assert result["status"] == "ok" and result["chunks"] > 0
-    assert result["rule_status"] == "draft"
+    assert result == {"status": "ok", "chunks": len(repository.searchable)}
 
 
 def test_cli_default_evaluation_remains_offline(settings, monkeypatch, capsys, tmp_path):

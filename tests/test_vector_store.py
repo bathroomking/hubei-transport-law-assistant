@@ -88,14 +88,9 @@ def vector_fixture(tmp_path, settings, repository):
     path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows))
     corpus = tmp_path / "corpus.jsonl"
     corpus.write_text("\n".join(parent.model_dump_json() for parent in parents))
-    rules = tmp_path / "rules.json"
-    rule = json.loads(settings.discretion_data_path.read_text())
-    rule["source_ids"] = [parent.id for parent in parents]
-    rules.write_text(json.dumps(rule))
     configured = settings.model_copy(
         update={
             "law_data_path": corpus,
-            "discretion_data_path": rules,
             "chroma_path": tmp_path / "chroma",
             "embedding_dimensions": 3,
             "embedding_batch_size": 4,

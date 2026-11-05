@@ -24,7 +24,7 @@ def upload_document(file: UploadFile, request: Request, background_tasks: Backgr
 
     处理状态通过 GET /documents/{id} 查询；只有 ready 文档进入检索。
     """
-    store = request.app.state.knowledge
+    store = request.app.state.runtime.knowledge
     try:
         result = store.receive(file.filename or "", file.file)
     finally:
@@ -35,18 +35,18 @@ def upload_document(file: UploadFile, request: Request, background_tasks: Backgr
 
 @router.get("/documents", response_model=list[DocumentStatus])
 def list_documents(request: Request):
-    return request.app.state.knowledge.list_documents()
+    return request.app.state.runtime.knowledge.list_documents()
 
 
 @router.get("/documents/{document_id}", response_model=DocumentStatus)
 def get_document(document_id: str, request: Request):
-    return request.app.state.knowledge.get_document(document_id)
+    return request.app.state.runtime.knowledge.get_document(document_id)
 
 
 @router.post("/documents/{document_id}/retry", response_model=DocumentStatus, status_code=202)
 def retry_document(document_id: str, request: Request, background_tasks: BackgroundTasks):
     """继续失败或被中断的导入，复用已保存的分块和成功向量批次。"""
-    store = request.app.state.knowledge
+    store = request.app.state.runtime.knowledge
     result = store.retry(document_id)
     background_tasks.add_task(store.process, document_id)
     return result

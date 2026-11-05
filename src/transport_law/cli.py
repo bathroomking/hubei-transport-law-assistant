@@ -7,7 +7,6 @@ from pathlib import Path
 from pydantic import BaseModel, ValidationError
 
 from transport_law.config import PROJECT_ROOT, Settings
-from transport_law.discretion import load_discretion_rules
 from transport_law.errors import AppError
 from transport_law.evaluation import evaluate_retrieval
 from transport_law.ingest import extract_pdf
@@ -44,7 +43,7 @@ def parser() -> argparse.ArgumentParser:
     chunk.add_argument("--title", help="文档标题，默认使用文件名")
     chunk.add_argument("--chunk-size", type=int, default=800, help="单块字符数上限，默认 800")
     chunk.add_argument("--chunk-overlap", type=int, default=120, help="目标重叠字符数，默认 120")
-    commands.add_parser("validate-data", help="校验条目、唯一 ID 和规则来源引用")
+    commands.add_parser("validate-data", help="校验资料格式、来源字段和唯一 ID")
     index = commands.add_parser("index-vectors", help="调用阿里云百炼，把已有分块写入 Chroma")
     index.add_argument(
         "--documents", type=Path, required=True, help="完整 langchain_documents.jsonl"
@@ -112,14 +111,12 @@ def run(args) -> int:
             )
         return 0
     if args.command == "validate-data":
-        # 维护检查只读取本地资料和规则，不初始化在线问答运行时。
+        # 维护检查只读取本地资料，不初始化在线问答运行时。
         repository = LawRepository.from_jsonl(settings.law_data_path)
-        rules = load_discretion_rules(settings.discretion_data_path, repository)
         print_json(
             {
                 "status": "ok",
                 "chunks": len(repository.searchable),
-                "rule_status": rules.review_status,
             }
         )
         return 0

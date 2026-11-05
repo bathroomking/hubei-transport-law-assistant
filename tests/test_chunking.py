@@ -170,7 +170,7 @@ def test_existing_outputs_and_source_are_never_overwritten(tmp_path):
 
 
 def test_scanned_pdf_is_reported_without_publishing(tmp_path, monkeypatch):
-    monkeypatch.setattr("transport_law.ingest.load_document", lambda _: document("", ""))
+    monkeypatch.setattr("transport_law.chunking.load_document", lambda _: document("", ""))
     output = tmp_path / "draft.jsonl"
     with pytest.raises(AppError) as error:
         chunk_document(tmp_path / "scan.pdf", output)
@@ -179,14 +179,27 @@ def test_scanned_pdf_is_reported_without_publishing(tmp_path, monkeypatch):
 
 
 def test_pdf_report_lists_pages_requiring_ocr(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "transport_law.ingest.load_document", lambda _: document("前页文字", "", "后页文字")
+    doc = document("前页文字", "", "后页文字")
+    monkeypatch.setattr("transport_law.chunking.load_document", lambda _: doc)
+    output = tmp_path / "draft.jsonl"
+    report = chunk_document(
+        tmp_path / "mixed.pdf", output, document_id="mixed-document", title="混合 PDF"
     )
-    report = chunk_document(tmp_path / "mixed.pdf", tmp_path / "draft.jsonl")
-    assert report["pdf_page_count"] == 3
-    assert report["needs_ocr_pages"] == [2]
-    assert report["chunk_count"] == 2
-    assert report["status"] == "staged_not_published"
+    assert report == {
+        "status": "staged_not_published",
+        "chunk_count": 2,
+        "pdf_page_count": 3,
+        "needs_ocr_pages": [2],
+        "chunking": ChunkingOptions().model_dump(),
+        "output": str(output),
+        "notice": "候选分块尚未进入检索库；需核对原文、表格关系、事项分类及来源版本。",
+    }
+    chunks = [DraftChunk.model_validate_json(line) for line in output.read_text().splitlines()]
+    assert all(
+        chunk.document_id == "mixed-document" and chunk.title == "混合 PDF" for chunk in chunks
+    )
+    assert [chunk.source.locations[0].pdf_page for chunk in chunks] == [1, 3]
+    assert_source_coverage(doc, chunks)
 
 
 def test_cli_chunks_new_document_without_settings_or_runtime(tmp_path, monkeypatch, capsys):

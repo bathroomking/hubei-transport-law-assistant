@@ -130,8 +130,6 @@ class BM25Retriever:
             alias_bonus = (
                 20 if any(normalize(alias) in normalized_question for alias in chunk.aliases) else 0
             )
-            if normalize(chunk.id) in normalized_question:
-                alias_bonus += 100
             # 没有匹配口语词的同事项记录仍作为关联依据保留。
             hits.append(SearchHit(chunk=chunk, score=round(score + alias_bonus + 1, 6)))
         return sorted(hits, key=lambda hit: (-hit.score, hit.chunk.id))[:limit]

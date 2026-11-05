@@ -139,13 +139,11 @@ src/transport_law/
   embeddings.py    百炼向量接口、校验与重试
   vector_store.py  Chroma 持久化、续传与父法条回填
   hybrid.py        RRF 融合与正式法规库算法评测检索器
-  online.py        双库全局 BM25/dense 排名、统一问答与密钥检查
+  online.py        双库资料读取与全局 BM25/dense 排名
   knowledge.py     上传登记、后台分块入库与上传资料检索
   llm.py           DeepSeek 请求、超时和错误处理
-  prompts.py       解释、引用与缺失信息的提示词
-  qa.py            PromptTemplate 与原文拼接
-  service.py       问答流程、引用校验与可信来源回填
-  discretion.py    裁量规则草稿及来源引用校验
+  prompts.py       提示词与原文消息构建
+  service.py       在线配置检查、问答、引用校验与原文回填
   runtime.py       装配在线问答和维护所需组件
   main.py          API 与前端静态资源
   web/             单页问答，无前端构建依赖
@@ -153,7 +151,6 @@ src/transport_law/
 data/
   raw/             来源 PDF、官网快照与来源清单
   processed/       整理后的知识条目
-  rules/           待核验的裁量规则
   staging/         分块等暂存产物，不提交 Git
   local/           本地索引、上传原件与处理记录，不提交 Git
 evals/             检索回归题集

@@ -2,24 +2,28 @@ import asyncio
 
 from pydantic import ValidationError
 
+from transport_law.config import Settings
 from transport_law.errors import AppError
 from transport_law.llm import LanguageModel
-from transport_law.prompts import INSUFFICIENT_ANSWER
-from transport_law.qa import StuffQAChain
+from transport_law.prompts import INSUFFICIENT_ANSWER, build_qa_messages
 from transport_law.retrieval import Retriever
 from transport_law.schemas import AnswerResponse, GeneratedAnswer, SearchRequest
 
 
 class LawService:
-    def __init__(self, retriever: Retriever, llm: LanguageModel, top_k: int = 5):
+    def __init__(self, retriever: Retriever, llm: LanguageModel, settings: Settings):
         self.retriever = retriever
         self.llm = llm
-        self.top_k = top_k
+        self.settings = settings
 
     async def ask(self, request: SearchRequest) -> AnswerResponse:
+        if not self.settings.llm_configured:
+            raise AppError("llm_not_configured", "在线问答需要配置 DEEPSEEK_API_KEY。", 503)
+        if not self.settings.embedding_configured:
+            raise AppError("embedding_not_configured", "在线问答需要配置 DASHSCOPE_API_KEY。", 503)
         # Chroma 检索包含同步 HTTP 请求，在工作线程执行，避免阻塞 FastAPI 事件循环。
         hits = await asyncio.to_thread(
-            self.retriever.search, request.question, request.top_k or self.top_k
+            self.retriever.search, request.question, request.top_k or self.settings.retrieval_top_k
         )
         if not hits:
             return AnswerResponse(
@@ -28,7 +32,9 @@ class LawService:
                 follow_up_questions=["请补充具体问题或导入相关资料。"],
             )
         source_documents = [hit.chunk for hit in hits]
-        completion = await StuffQAChain(self.llm).ainvoke(request.question, source_documents)
+        completion = await self.llm.complete(
+            build_qa_messages(request.question, source_documents), json_mode=True
+        )
         try:
             generated = GeneratedAnswer.model_validate_json(completion.content)
         except ValidationError as exc:

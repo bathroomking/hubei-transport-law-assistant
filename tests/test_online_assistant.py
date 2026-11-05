@@ -88,7 +88,7 @@ def test_unified_ask_merges_both_libraries_and_publishes_ready_sources_without_r
     with TestClient(create_app(settings, llm)) as client:
         runtime = client.app.state.runtime
         assert isinstance(runtime.service.retriever, UnifiedRetriever)
-        assert runtime.knowledge is client.app.state.knowledge
+        assert runtime.repository.knowledge is runtime.knowledge
         first = client.post("/api/v1/ask", json={"question": question, "top_k": 3})
         assert first.status_code == 200, first.text
         assert len(first.json()["source_documents"]) == 2

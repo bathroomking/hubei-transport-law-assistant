@@ -29,7 +29,6 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.runtime = build_runtime(settings, llm, retriever=retriever)
-        app.state.knowledge = app.state.runtime.knowledge
         yield
 
     app = FastAPI(

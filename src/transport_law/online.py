@@ -1,4 +1,4 @@
-"""单一在线问答：正式法规与已完成上传的文档共享两路排名。"""
+"""正式法规与上传资料的统一读取及混合检索。"""
 
 from transport_law.config import Settings
 from transport_law.embeddings import DashScopeEmbeddings, Embeddings
@@ -7,8 +7,7 @@ from transport_law.hybrid import fuse_rankers
 from transport_law.knowledge import KnowledgeStore
 from transport_law.repository import LawRepository
 from transport_law.retrieval import BM25Retriever
-from transport_law.schemas import AnswerResponse, LegalChunk, SearchHit, SearchRequest
-from transport_law.service import LawService
+from transport_law.schemas import LegalChunk, SearchHit
 from transport_law.vector_store import ChromaRetriever
 
 
@@ -93,16 +92,3 @@ class UnifiedRetriever:
             top_k=top_k,
             rrf_k=self.settings.hybrid_rrf_k,
         )
-
-
-class OnlineLawService(LawService):
-    def __init__(self, *args, settings: Settings, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.settings = settings
-
-    async def ask(self, request: SearchRequest) -> AnswerResponse:
-        if not self.settings.llm_configured:
-            raise AppError("llm_not_configured", "在线问答需要配置 DEEPSEEK_API_KEY。", 503)
-        if not self.settings.embedding_configured:
-            raise AppError("embedding_not_configured", "在线问答需要配置 DASHSCOPE_API_KEY。", 503)
-        return await super().ask(request)

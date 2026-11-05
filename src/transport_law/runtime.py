@@ -3,16 +3,17 @@ from dataclasses import dataclass
 from transport_law.config import Settings
 from transport_law.knowledge import KnowledgeStore
 from transport_law.llm import DeepSeekClient, LanguageModel
-from transport_law.online import CombinedRepository, OnlineLawService, UnifiedRetriever
+from transport_law.online import CombinedRepository, UnifiedRetriever
 from transport_law.repository import LawRepository
 from transport_law.retrieval import Retriever
+from transport_law.service import LawService
 
 
 @dataclass
 class Runtime:
     settings: Settings
     repository: CombinedRepository
-    service: OnlineLawService
+    service: LawService
     knowledge: KnowledgeStore
 
 
@@ -31,10 +32,9 @@ def build_runtime(
     return Runtime(
         settings=settings,
         repository=repository,
-        service=OnlineLawService(
+        service=LawService(
             retriever if retriever is not None else UnifiedRetriever(curated, knowledge, settings),
             llm or DeepSeekClient(settings),
-            top_k=settings.retrieval_top_k,
             settings=settings,
         ),
         knowledge=knowledge,

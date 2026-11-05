@@ -89,7 +89,7 @@ document = drafts[0].to_document()
 
 已经登记、清洗并按法条/表项整理的整批资料可以使用下文的 [批量处理入口](#批量处理已整理资料)。它仍然显式执行，不会随服务启动触发。
 
-离线草稿调用链是 `chunk-document → load_documents → split_legal_documents → DraftChunk 校验 → 写入候选 JSONL`，整个命令执行期间完成分块。
+CLI 与上传处理复用 `load_document → build_draft_chunks`；后者统一完成 Document 转换、切分和 DraftChunk 校验。CLI 将结果写入候选 JSONL，上传任务继续生成向量。
 
 | 操作 | 当前是否会执行 chunking |
 | --- | --- |

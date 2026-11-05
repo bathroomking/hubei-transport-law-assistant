@@ -20,7 +20,6 @@ class Settings(BaseSettings):
     deepseek_max_tokens: int = Field(default=3000, ge=128, le=16384)
     deepseek_max_retries: int = Field(default=1, ge=0, le=3)
     law_data_path: Path = PROJECT_ROOT / "data/processed/legal_chunks.jsonl"
-    discretion_data_path: Path = PROJECT_ROOT / "data/rules/road_occupation.json"
     retrieval_top_k: int = Field(default=5, ge=1, le=10)
     hybrid_candidate_k: int = Field(default=50, ge=10, le=200)
     hybrid_rrf_k: int = Field(default=60, ge=1, le=1000)
@@ -75,7 +74,7 @@ class Settings(BaseSettings):
             raise ValueError("EMBEDDING_DIMENSIONS 必须是百炼 text-embedding-v4 支持的维度")
         return value
 
-    @field_validator("law_data_path", "discretion_data_path", "chroma_path", "knowledge_path")
+    @field_validator("law_data_path", "chroma_path", "knowledge_path")
     @classmethod
     def resolve_path(cls, value: Path) -> Path:
         return value if value.is_absolute() else PROJECT_ROOT / value

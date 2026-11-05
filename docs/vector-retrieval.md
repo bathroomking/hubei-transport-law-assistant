@@ -46,7 +46,7 @@ python -m transport_law ask "公路挖沟有哪些依据？"
 
 进度输出到 stderr，最后的 JSON 报告写到 stdout。`embedded` 是本次新生成的数量，`reused` 是已存在并核对一致的数量。密钥只用于服务端 HTTP 认证，不存入 Chroma，不发送到前端或报告。
 
-向量索引须先完成；索引缺失、未完成或配置不一致时会明确报错。`ask` 还需要 DeepSeek 密钥，使用与网页相同的统一问答链。仅 `evaluate` 提供 `--backend` 算法选项；`validate-data` 只做本地资料和规则来源校验。
+向量索引须先完成；索引缺失、未完成或配置不一致时会明确报错。`ask` 还需要 DeepSeek 密钥，使用与网页相同的统一问答链。仅 `evaluate` 提供 `--backend` 算法选项；`validate-data` 只校验本地条目格式、唯一 ID 和来源字段。
 
 ## 入库和检索规则
 

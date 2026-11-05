@@ -189,11 +189,10 @@ dialog::backdrop { background: #142d266e; backdrop-filter: blur(3px); }
   .header-actions { display: contents; }
   .page-nav { order: 3; flex-basis: 100%; border-bottom: 1px solid var(--line); gap: 18px; }
   .page-nav a { border-radius: 7px 7px 0 0; padding-inline: 16px; }
-  .service-status { margin-left: auto; }
   .brand { font-size: 15px; gap: 8px; }
   .brand img { width: 31px; height: 31px; }
   .brand-detail { margin-left: 4px; }
-  .service-status { font-size: 11px; padding: 7px 9px; gap: 6px; }
+  .service-status { margin-left: auto; font-size: 11px; padding: 7px 9px; gap: 6px; }
   main { padding: 0 20px 23px; }
   .intro { padding: 29px 0 27px; }
   .intro h1 { font-size: 31px; }

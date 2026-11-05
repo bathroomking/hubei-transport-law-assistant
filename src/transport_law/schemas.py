@@ -1,5 +1,4 @@
 from datetime import date
-from decimal import Decimal
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StringConstraints, model_validator
@@ -137,20 +136,3 @@ class AnswerResponse(Model):
     notice: str = "当前仅解释已收录材料；文件效力、适用地域和个案事实尚未完成核验。"
     model: str | None = None
     usage: Usage | None = None
-
-
-class DiscretionBand(Model):
-    id: Identifier
-    condition_text: Text
-    consequence_text: Text
-
-
-class DiscretionRuleSet(Model):
-    item_id: Identifier
-    version_id: Identifier
-    name: Text
-    review_status: Literal["draft"] = "draft"
-    source_ids: list[Identifier] = Field(min_length=1)
-    bands: list[DiscretionBand] = Field(min_length=1)
-    unresolved_boundaries_m2: list[Decimal]
-    review_notes: list[Text] = Field(min_length=1)

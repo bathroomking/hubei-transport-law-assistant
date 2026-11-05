@@ -20,7 +20,9 @@
 
 文档导入与服务启动分别执行：`chunk-document` 用 `load_documents()` 读取文档，以 `Document.page_content` 和 `metadata` 贯穿条文整理与 `split_legal_documents()`，通过 `DraftChunk` 校验后保存候选 JSONL。`DraftChunk` 与 `Document` 可以相互转换，持久化格式保持一致。
 
-服务启动只读取正式 JSONL，根据配置使用 BM25 或打开已完成的 Chroma 索引，不扫描原始资料、不重新分块或生成文档向量。Chroma 查询时只向量化问题；同步检索在线程内运行，不阻塞问答接口的事件循环。后续上传功能应在上传完成后创建独立导入任务。当前没有上传任务或索引热更新，详见 [分块执行时机](chunking.md#什么时候分块重启会做什么) 和 [向量检索说明](vector-retrieval.md)。
+服务启动只读取正式 JSONL，根据配置使用 BM25、Chroma 或混合 RRF，不扫描原始资料、不重新分块或生成文档向量。向量查询时只向量化问题；同步检索在线程内运行，不阻塞问答接口的事件循环。上传资料使用独立导入任务和 collection，状态为 ready 后参与后续查询，见 [上传知识库说明](knowledge-upload.md)。
+
+问答只检索一次，随后由 `StuffQAChain` 使用 LangChain Core `PromptTemplate`，将排好序的完整原文与问题一次交给 DeepSeek。无命中不调用模型；有命中但内容不足时，模型也可返回 `insufficient_evidence`。后端校验状态与引用，返回实际引用 `sources` 和全部检索资料 `source_documents`，详见 [最终问答链](qa-chain.md)。
 
 ## 本地前端
 

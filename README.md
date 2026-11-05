@@ -12,7 +12,7 @@
 | 独立检索 | 中文 BM25、事项别名、法规名称与条号定位；完整法条优先于重复节选，区分国家和湖北的同名法规 |
 | 向量检索 | 可选 百炼 text-embedding-v4 在线向量化，Chroma 本地持久化；分批入库、重复跳过、断点续传、子块回填父法条 |
 | 混合检索 | BM25 与向量并行召回，按父法条去重后用 RRF 融合；记录两路排名，保留精确条号和出处约束 |
-| RAG 问答 | 检索 → DeepSeek JSON 回复 → 引用 ID 校验 → 后端回填原文和出处 |
+| RAG 问答 | 排名原文 → PromptTemplate / stuff → DeepSeek 回答或资料不足 → 引用校验；返回实际引用和全部检索原文 |
 | 模型错误处理 | 缺 Key、认证失败、余额不足、限流、网络失败、总超时、空回复、截断、非法 JSON |
 | 裁量辅助 | 结构化事实输入、缺失字段追问、地域/道路类型检查、边界复核提醒 |
 | 数据整理 | PDF 逐页提取；LangChain 自动对 PDF/TXT/MD 分块，保存文件 SHA-256、来源位置及待审核状态 |
@@ -76,6 +76,8 @@ python -m transport_law ask "没办手续就在公路上挖沟，材料里有哪
 
 `chat` 和命中资料后的 `ask` 会向配置的 DeepSeek 服务发送输入，并使用 API 额度；RAG 同时发送本次检索到的资料。没有命中资料时直接返回 `insufficient_evidence`，不调用回答模型。密钥非空只表示已配置，实际连通性以测试结果为准。
 
+问答通过 LangChain Core `PromptTemplate` 一次传入已排序的原文和问题；有命中但原文不够回答时，也支持模型明确返回资料不足。完整流程、提示词与真实调用验证见 [最终问答链](docs/qa-chain.md)。
+
 模型接口和默认名称依据 2026-11-02 查阅的 [DeepSeek Chat Completions 文档](https://api-docs.deepseek.com/api/create-chat-completion/)；JSON 参数和空白回复处理依据 [DeepSeek JSON Output 文档](https://api-docs.deepseek.com/guides/json_mode/)。代码直接用 HTTPX 调用 DeepSeek，不需要 OpenAI 账户。初版显式关闭 thinking，所有输出仍做本地结构校验。
 
 成功问答中的关键字段：
@@ -85,6 +87,7 @@ python -m transport_law ask "没办手续就在公路上挖沟，材料里有哪
 | `answer` | 各条解释拼成的正文 |
 | `claims[].citation_ids` | 每条解释与依据条目的对应关系 |
 | `sources` | 后端回填真实原文、版本和出处；PDF 使用 `pdf_page`，官网正文使用 `official_url` 和 `locator` 条号 |
+| `source_documents` | 全部本次检索原文，保持排名；包括未被答案引用的候选，也在资料不足时返回 |
 | `follow_up_questions` | 模型提出的补充问题 |
 | `applicability_status` | 当前固定为 `not_verified` |
 | `model` / `usage` | 实际响应的模型名称和可用的 token 用量 |
@@ -184,6 +187,7 @@ src/transport_law/
   knowledge.py     上传登记、同名检查、后台分块入库及上传库检索
   llm.py           DeepSeek HTTP 请求、超时和错误处理
   prompts.py       有证据的解释提示词
+  qa.py            PromptTemplate 与 stuff 文档拼接、单次模型调用
   service.py       RAG 流程与引用校验
   discretion.py    裁量事实检查和草稿规则读取
   ingest.py        PDF 逐页提取

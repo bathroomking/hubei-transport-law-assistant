@@ -113,8 +113,17 @@ class Claim(Model):
 class GeneratedAnswer(Model):
     """模型只写解释和引用 ID，不能自行编造来源字段或适用状态。"""
 
-    claims: list[Claim] = Field(min_length=1, max_length=8)
+    status: Literal["answered", "insufficient_evidence"] = "answered"
+    claims: list[Claim] = Field(max_length=8)
     follow_up_questions: list[Annotated[Text, Field(max_length=300)]] = Field(max_length=8)
+
+    @model_validator(mode="after")
+    def validate_answer_status(self):
+        if self.status == "answered" and not self.claims:
+            raise ValueError("有答案时必须提供带引用的陈述")
+        if self.status == "insufficient_evidence" and self.claims:
+            raise ValueError("资料不足时不得生成带引用的断言")
+        return self
 
 
 class Usage(Model):
@@ -128,6 +137,7 @@ class AnswerResponse(Model):
     answer: str
     claims: list[Claim] = Field(default_factory=list)
     sources: list[LegalChunk] = Field(default_factory=list)
+    source_documents: list[LegalChunk] = Field(default_factory=list)
     follow_up_questions: list[str] = Field(default_factory=list)
     applicability_status: Literal["not_verified"] = "not_verified"
     notice: str = "当前仅解释已收录材料；文件效力、适用地域和个案事实尚未完成核验。"

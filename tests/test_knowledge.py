@@ -424,7 +424,8 @@ def test_uploaded_qa_uses_stored_sources_and_rejects_invented_citations(upload_s
         forged = False
 
         async def complete(self, messages, *, json_mode):
-            evidence = json.loads(messages[1]["content"])["evidence"]
+            context = messages[1]["content"].split("Context:\n", 1)[1]
+            evidence, _ = json.JSONDecoder().raw_decode(context)
             assert json_mode and len(evidence) == 1
             citation = "not-retrieved" if self.forged else evidence[0]["id"]
             return Completion(
@@ -448,6 +449,7 @@ def test_uploaded_qa_uses_stored_sources_and_rejects_invented_citations(upload_s
         answer = client.post(f"{BASE}/ask", json={"question": "施工许可"})
         assert answer.status_code == 200, answer.text
         source = answer.json()["sources"][0]
+        assert answer.json()["source_documents"] == [source]
         assert source == client.get(f"{BASE}/chunks/{source['id']}").json()
         assert answer.json()["applicability_status"] == "not_verified"
         llm.forged = True

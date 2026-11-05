@@ -276,7 +276,8 @@ def test_api_uses_vectors_and_keeps_citation_validation(vector_fixture, monkeypa
         citation = "test-A001"
 
         async def complete(self, messages, *, json_mode):
-            evidence = json.loads(messages[1]["content"])["evidence"]
+            context = messages[1]["content"].split("Context:\n", 1)[1]
+            evidence, _ = json.JSONDecoder().raw_decode(context)
             assert {row["id"] for row in evidence} == {"test-A001", "test-A002"}
             return Completion(
                 content=json.dumps(
@@ -300,6 +301,9 @@ def test_api_uses_vectors_and_keeps_citation_validation(vector_fixture, monkeypa
             assert hits[0]["retrieval"]["method"] == "rrf"
             assert hits[0]["retrieval"]["dense_rank"] == 1
         answer = c.post("/api/v1/ask", json=request).json()
+        assert [row["id"] for row in answer["source_documents"]] == [
+            hit["chunk"]["id"] for hit in hits
+        ]
         assert answer["sources"][0] == repository.get_article("test-A001").model_dump(mode="json")
         assert answer["applicability_status"] == "not_verified"
         llm.citation = "invented-source"

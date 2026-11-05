@@ -187,10 +187,11 @@
 
   function renderAnswer(target, data) {
     target.replaceChildren();
+    let card;
     if (data.status === "insufficient_evidence") {
-      target.append(emptyState("资料依据不足", data.answer, "book"));
+      card = emptyState("资料依据不足", data.answer, "book");
     } else {
-      const card = el("section", "card answer-card");
+      card = el("section", "card answer-card");
       card.append(el("span", "badge green", "已生成 · 含来源引用"), el("h2", "dialog-section-title", "基于材料的解释"));
       data.claims.forEach((claim) => {
         const paragraph = el("p", "answer-claim");
@@ -203,17 +204,29 @@
         });
         card.append(paragraph);
       });
+    }
+    if (data.model || data.usage || data.status === "answered") {
       const usage = data.usage ? ` · Token 用量 ${data.usage.total_tokens}` : "";
       card.append(el("p", "answer-meta", `模型：${data.model || "未返回模型名称"}${usage}`));
-      card.append(notice(data.notice));
-      target.append(card);
     }
+    card.append(notice(data.notice));
+    target.append(card);
     if (data.follow_up_questions.length) target.append(followUp(data.follow_up_questions));
     if (data.sources.length) {
       const heading = resultHeading("引用原文", `${data.sources.length} 条来源`);
       heading.classList.add("source-list-heading");
       target.append(heading);
       data.sources.forEach((source, index) => target.append(sourceCard(source, index)));
+    }
+    const sourceDocuments = data.source_documents ?? [];
+    if (sourceDocuments.length) {
+      const materials = el("details", "coverage");
+      materials.append(
+        el("summary", "", `本次检索资料（${sourceDocuments.length} 条）`),
+        el("p", "", "以下资料按检索排名展示，序号表示检索顺序。检索命中不代表足以支持回答；回答实际使用的资料见“引用原文”。"),
+      );
+      sourceDocuments.forEach((source, index) => materials.append(sourceCard(source, index)));
+      target.append(materials);
     }
   }
 

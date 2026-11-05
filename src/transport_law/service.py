@@ -1,11 +1,11 @@
 import asyncio
-import json
 
 from pydantic import ValidationError
 
 from transport_law.errors import AppError
 from transport_law.llm import LanguageModel
-from transport_law.prompts import SYSTEM_PROMPT
+from transport_law.prompts import INSUFFICIENT_ANSWER
+from transport_law.qa import StuffQAChain
 from transport_law.repository import LawRepository
 from transport_law.retrieval import Retriever
 from transport_law.schemas import AnswerResponse, GeneratedAnswer, SearchRequest, SearchResponse
@@ -33,26 +33,25 @@ class LawService:
         if not result.hits:
             return AnswerResponse(
                 status="insufficient_evidence",
-                answer="当前资料中未检索到足够依据，不能据此给出处罚意见。",
-                follow_up_questions=["请补充具体行为或导入该事项的法规与裁量资料。"],
+                answer=INSUFFICIENT_ANSWER,
+                follow_up_questions=["请补充具体问题或导入相关资料。"],
             )
-        evidence = [hit.chunk.model_dump(mode="json") for hit in result.hits]
-        completion = await self.llm.complete(
-            [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {"question": request.question, "evidence": evidence}, ensure_ascii=False
-                    ),
-                },
-            ],
-            json_mode=True,
-        )
+        source_documents = [hit.chunk for hit in result.hits]
+        completion = await StuffQAChain(self.llm).ainvoke(request.question, source_documents)
         try:
             generated = GeneratedAnswer.model_validate_json(completion.content)
         except ValidationError as exc:
             raise AppError("llm_invalid_json", "模型输出未通过 JSON 结构校验，请重试。") from exc
+
+        if generated.status == "insufficient_evidence":
+            return AnswerResponse(
+                status="insufficient_evidence",
+                answer=INSUFFICIENT_ANSWER,
+                source_documents=source_documents,
+                follow_up_questions=generated.follow_up_questions,
+                model=completion.model,
+                usage=completion.usage,
+            )
 
         allowed = {hit.chunk.id: hit.chunk for hit in result.hits}
         cited_ids = list(
@@ -68,6 +67,7 @@ class LawService:
             answer="\n\n".join(claim.text for claim in generated.claims),
             claims=generated.claims,
             sources=[allowed[citation_id] for citation_id in cited_ids],
+            source_documents=source_documents,
             follow_up_questions=generated.follow_up_questions,
             model=completion.model,
             usage=completion.usage,

@@ -45,5 +45,5 @@ def evaluate_retrieval(path: Path, retriever: Retriever, top_k: int = 5) -> dict
         "recall_at_k": sum(recalls) / len(recalls) if recalls else None,
         "top_k": top_k,
         "results": results,
-        "note": "单事项开发回归集，只评估检索；不代表实际业务或模型回答准确率。",
+        "note": "开发回归集，只评估指定语料上的检索；不代表实际业务或模型回答准确率。",
     }

@@ -27,7 +27,7 @@ def generated(ids=None):
             "claims": [
                 {
                     "text": "材料载有擅自占用、挖掘公路的规定。",
-                    "citation_ids": ids or ["HB-ROAD-003-LAW44"],
+                    "citation_ids": ids or ["cn-highway-2017-A044"],
                 }
             ],
             "follow_up_questions": ["具体道路属性和许可情况是什么？"],
@@ -53,7 +53,7 @@ def test_sources_are_filled_from_repository(repository, retriever):
     llm = FakeLLM(generated())
     service = LawService(repository, retriever, llm)
     result = asyncio.run(service.ask(SearchRequest(question="公路挖沟怎么处理？")))
-    assert result.sources == [repository.get_article("HB-ROAD-003-LAW44")]
+    assert result.sources == [repository.get_article("cn-highway-2017-A044")]
     assert result.applicability_status == "not_verified"
     assert llm.calls[0][1] is True
     assert "verification_status" in llm.calls[0][0][1]["content"]
@@ -62,7 +62,7 @@ def test_sources_are_filled_from_repository(repository, retriever):
 def test_outside_question_never_calls_llm(repository, retriever):
     llm = FakeLLM("should not be called")
     result = asyncio.run(
-        LawService(repository, retriever, llm).ask(SearchRequest(question="超速怎么罚？"))
+        LawService(repository, retriever, llm).ask(SearchRequest(question="明天武汉天气怎么样？"))
     )
     assert result.status == "insufficient_evidence"
     assert result.sources == [] and llm.calls == []
@@ -70,7 +70,7 @@ def test_outside_question_never_calls_llm(repository, retriever):
 
 def test_rejects_citation_that_exists_but_was_not_retrieved(repository, retriever):
     request = SearchRequest(question="公路法第四十四条第一款", top_k=1)
-    assert retriever.search(request.question, 1)[0].chunk.id == "HB-ROAD-003-LAW44"
+    assert retriever.search(request.question, 1)[0].chunk.id == "cn-highway-2017-A044"
     llm = FakeLLM(generated(["HB-ROAD-003-BANDS"]))
     with pytest.raises(AppError) as error:
         asyncio.run(LawService(repository, retriever, llm).ask(request))

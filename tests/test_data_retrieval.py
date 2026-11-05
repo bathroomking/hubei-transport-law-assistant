@@ -24,10 +24,10 @@ def test_regression_dataset(retriever):
 @pytest.mark.parametrize(
     ("question", "expected"),
     [
-        ("公路法第四十四条第一款", "HB-ROAD-003-LAW44"),
-        ("公路法第44条在资料里是怎么写的？", "HB-ROAD-003-LAW44"),
-        ("公路法第76条", "HB-ROAD-003-LAW76"),
-        ("公路安全保护条例第27条", "HB-ROAD-003-REG27"),
+        ("公路法第四十四条第一款", "cn-highway-2017-A044"),
+        ("公路法第44条在资料里是怎么写的？", "cn-highway-2017-A044"),
+        ("公路法第76条", "cn-highway-2017-A076"),
+        ("公路安全保护条例第27条", "cn-highway-protection-2011-A027"),
         ("HB-ROAD-003-REG62", "HB-ROAD-003-REG62"),
     ],
 )
@@ -89,6 +89,8 @@ def test_seed_provenance_matches_actual_pdf(repository):
     assert len(reader.pages) == 215
     text = re.sub(r"\s+", "", reader.pages[1].extract_text())
     for chunk in repository.searchable:
+        if chunk.document_id != "hubei-discretion-upload":
+            continue
         assert chunk.source.sha256 == digest
         assert chunk.source.pdf_page == 2
         assert chunk.source.verification_status == "pending"

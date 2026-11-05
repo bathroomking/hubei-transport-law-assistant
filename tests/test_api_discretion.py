@@ -12,8 +12,8 @@ from transport_law.schemas import CaseFacts
 def test_api_smoke_validation_and_missing_key(settings):
     with TestClient(create_app(settings)) as client:
         health = client.get("/health").json()
-        assert health["chunk_count"] == 5
-        assert health["pending_verification_count"] == 5
+        assert health["chunk_count"] == 1336
+        assert health["pending_verification_count"] == 1336
         assert health["llm_configured"] is False
         assert client.get("/docs").status_code == 200
         hits = client.post("/api/v1/retrieve", json={"question": "路边挖沟有哪些依据？"}).json()[
@@ -24,7 +24,7 @@ def test_api_smoke_validation_and_missing_key(settings):
         assert article.status_code == 200
         assert client.get("/api/v1/articles/unknown").status_code == 404
         assert client.post("/api/v1/retrieve", json={"question": " "}).status_code == 422
-        answer = client.post("/api/v1/ask", json={"question": "超速怎么罚？"}).json()
+        answer = client.post("/api/v1/ask", json={"question": "明天武汉天气怎么样？"}).json()
         assert answer["status"] == "insufficient_evidence"
         missing_key = client.post("/api/v1/ask", json={"question": "公路挖沟如何处理？"})
         assert missing_key.status_code == 503

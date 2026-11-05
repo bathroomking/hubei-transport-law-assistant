@@ -1,20 +1,20 @@
-{"id":"standard-01","question":"擅自占用、挖掘公路有哪些认定和处罚依据？","expected_ids":["HB-ROAD-003-LAW44","HB-ROAD-003-REG27","HB-ROAD-003-LAW76","HB-ROAD-003-REG62","HB-ROAD-003-BANDS"]}
-{"id":"colloquial-01","question":"在路边挖了条沟铺管线，没办手续，会罚多少？","expected_ids":["HB-ROAD-003-LAW44","HB-ROAD-003-REG27","HB-ROAD-003-BANDS"]}
-{"id":"colloquial-02","question":"在公路上挖沟，需要查哪些依据？","expected_ids":["HB-ROAD-003-LAW44","HB-ROAD-003-LAW76"]}
-{"id":"colloquial-03","question":"在县道上开槽施工要查哪些资料？","expected_ids":["HB-ROAD-003-REG27","HB-ROAD-003-REG62"]}
-{"id":"colloquial-04","question":"施工队占了省道一部分，能查到相关标准吗？","expected_ids":["HB-ROAD-003-LAW44","HB-ROAD-003-BANDS"]}
-{"id":"colloquial-05","question":"没批准就把路面挖开了，材料里怎么规定？","expected_ids":["HB-ROAD-003-LAW76","HB-ROAD-003-REG62"]}
-{"id":"alias-01","question":"占道施工有什么裁量标准？","expected_ids":["HB-ROAD-003-BANDS"]}
-{"id":"article-01","question":"公路法第44条在资料里是怎么写的？","expected_ids":["HB-ROAD-003-LAW44"]}
-{"id":"article-02","question":"公路安全保护条例第62条有什么规定？","expected_ids":["HB-ROAD-003-REG62"]}
-{"id":"boundary-20","question":"挖掘公路正好20平方米，裁量表怎么写？","expected_ids":["HB-ROAD-003-BANDS"]}
-{"id":"boundary-40","question":"挖掘公路40平方米以上的档次是什么？","expected_ids":["HB-ROAD-003-BANDS"]}
-{"id":"foreign-context","question":"湖南挖掘公路，可以直接用湖北的标准吗？","expected_ids":["HB-ROAD-003-BANDS"]}
-{"id":"outside-speed","question":"超速多少罚款？","expect_empty":true}
-{"id":"outside-road-speed","question":"湖北公路上超速20%怎么罚？","expect_empty":true}
-{"id":"outside-overload","question":"高速公路货车超载怎么处罚？","expect_empty":true}
-{"id":"outside-business","question":"无证经营道路运输会罚多少？","expect_empty":true}
-{"id":"outside-parking","question":"路边停车会罚多少？","expect_empty":true}
-{"id":"outside-generic","question":"湖北交通运输罚款标准是什么？","expect_empty":true}
-{"id":"outside-weather","question":"明天武汉天气怎么样？","expect_empty":true}
-{"id":"outside-land","question":"在自家院子挖沟需要许可吗？","expect_empty":true}
+{"id": "standard-01", "question": "擅自占用、挖掘公路有哪些认定和处罚依据？", "expected_ids": ["cn-highway-2017-A044", "cn-highway-protection-2011-A027", "cn-highway-2017-A076", "cn-highway-protection-2011-A062", "HB-ROAD-003-BANDS"]}
+{"id": "colloquial-01", "question": "在路边挖了条沟铺管线，没办手续，会罚多少？", "expected_ids": ["cn-highway-2017-A044", "cn-highway-protection-2011-A027", "HB-ROAD-003-BANDS"]}
+{"id": "colloquial-02", "question": "在公路上挖沟，需要查哪些依据？", "expected_ids": ["cn-highway-2017-A044", "cn-highway-2017-A076"]}
+{"id": "colloquial-03", "question": "在县道上开槽施工要查哪些资料？", "expected_ids": ["cn-highway-protection-2011-A027", "cn-highway-protection-2011-A062"]}
+{"id": "colloquial-04", "question": "施工队占了省道一部分，能查到相关标准吗？", "expected_ids": ["cn-highway-2017-A044", "HB-ROAD-003-BANDS"]}
+{"id": "colloquial-05", "question": "没批准就把路面挖开了，材料里怎么规定？", "expected_ids": ["cn-highway-2017-A076", "cn-highway-protection-2011-A062"]}
+{"id": "alias-01", "question": "占道施工有什么裁量标准？", "expected_ids": ["HB-ROAD-003-BANDS"]}
+{"id": "article-01", "question": "公路法第44条在资料里是怎么写的？", "expected_ids": ["cn-highway-2017-A044"]}
+{"id": "article-02", "question": "公路安全保护条例第62条有什么规定？", "expected_ids": ["cn-highway-protection-2011-A062"]}
+{"id": "boundary-20", "question": "挖掘公路正好20平方米，裁量表怎么写？", "expected_ids": ["HB-ROAD-003-BANDS"]}
+{"id": "boundary-40", "question": "挖掘公路40平方米以上的档次是什么？", "expected_ids": ["HB-ROAD-003-BANDS"]}
+{"id": "foreign-context", "question": "湖南挖掘公路，可以直接用湖北的标准吗？", "expected_ids": ["HB-ROAD-003-BANDS"]}
+{"id": "traffic-speed", "question": "超速多少罚款？", "expected_ids": ["hb-traffic-2017-A073"]}
+{"id": "traffic-road-speed", "question": "湖北公路上超速20%怎么罚？", "expected_ids": ["hb-traffic-2017-A073"]}
+{"id": "traffic-overload", "question": "高速公路货车超载怎么处罚？", "expected_ids": ["cn-traffic-safety-2021-A092", "hb-traffic-2017-A074"]}
+{"id": "transport-business", "question": "无证经营道路运输会罚多少？", "expected_ids": ["cn-transport-2026-A063"]}
+{"id": "traffic-parking", "question": "路边停车会罚多少？", "expected_ids": ["cn-traffic-safety-2021-A093"]}
+{"id": "outside-generic", "question": "湖北交通运输罚款标准是什么？", "expect_empty": true}
+{"id": "outside-weather", "question": "明天武汉天气怎么样？", "expect_empty": true}
+{"id": "outside-land", "question": "在自家院子挖沟需要许可吗？", "expect_empty": true}

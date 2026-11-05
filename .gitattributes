@@ -1,0 +1,2 @@
+# 官方来源快照须保留原始字节，以便复核登记的 SHA-256；不转换行尾或检查空白格式。
+data/raw/laws/** -text -whitespace

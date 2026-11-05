@@ -7,7 +7,7 @@
 在项目根目录、已激活的虚拟环境中运行：
 
 ```bash
-python -m pip install -e ".[vectors]" -c constraints.txt
+python -m pip install -e ".[ingest,vectors]" -c constraints.txt
 ```
 
 在已有 `.env` 中添加以下配置，不覆盖原有 DeepSeek 配置：
@@ -26,20 +26,23 @@ CHROMA_COLLECTION=transport_law_bailian_v4_2048_v1
 
 真实密钥只写本地 `.env`，`.env.example` 保持空值并作为新环境的配置模板保留。向量接口使用 `DASHSCOPE_API_KEY`。
 
-先校验已有批次。预检不需要 Key、不调用模型、不创建数据库：
+先从正式资料生成分块批次，再预检。两步均不需要 Key、不调用模型、不创建数据库：
 
 ```bash
+python scripts/chunk_legal_corpus.py --output-dir data/staging/current_document_batch
 python -m transport_law index-vectors \
-  --documents data/staging/document_batch_20261104/langchain_documents.jsonl --dry-run
+  --documents data/staging/current_document_batch/langchain_documents.jsonl --dry-run
 ```
 
-当前完整批次应报告 `chunks: 1338`、`parents: 1336`。这份文件被 Git 忽略；新检出仓库需要先按 [批量分块说明](chunking.md#批量处理已整理资料) 生成自己的批次，并把上述路径替换为实际输出。
+当前完整批次应报告 `chunks: 1338`、`parents: 1336`。输出目录必须不存在；若已有完整批次，可直接预检并替换命令中的路径，详见 [批量分块说明](chunking.md#批量处理已整理资料)。
+
+已建索引的查询不读取 `data/staging/`。本地暂存批次已于 2026-11-05 清理；需要重建索引时，先按上述命令重新分块。
 
 填好密钥后执行正式入库；它会向阿里云百炼发送法规标题、条号和片段正文，并使用 API 额度：
 
 ```bash
 python -m transport_law index-vectors \
-  --documents data/staging/document_batch_20261104/langchain_documents.jsonl
+  --documents data/staging/current_document_batch/langchain_documents.jsonl
 python -m transport_law vector-status
 python -m transport_law ask "公路挖沟有哪些依据？"
 ```

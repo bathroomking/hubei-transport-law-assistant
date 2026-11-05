@@ -14,6 +14,20 @@ ba2ef1a318f5bca73a228de21d70ff884387a1a3f233a87402c56e506fecce57
 
 ## 整理流程
 
+### 官网全文补充（2026-11-04）
+
+两轮补充的 16 部法规、规章及公安裁量相关部分见 [法规资料库](legal-sources.md)。`data/raw/laws/manifest.json` 登记来源网址、制定机关、法律层级、版本、施行日期说明、条数、快照格式和 SHA-256。`html` 是下载的网页 HTML（统一为 UTF-8），`web_text` 是浏览工具提取的网页可见文本，二者均不冒充 PDF。`pdf_extract` 则指完整原始 PDF 及其独立校验的按条/表项整理稿，不是重新制作的官方文件。
+
+运行 `python scripts/build_legal_corpus.py` 可离线重建 `docs/legal/` 的阅读文档和默认 `legal_chunks.jsonl` 中对应来源的条文；`--check` 只验证不写入。按条拆分保留整条的款项，去掉网页导航、章节标题及页脚；不以固定字符数截断法条。原上传记录保持原样。新增文本经程序结构检查和关键条文核对，尚未逐字人工审定，因此没有设置 `transcription_checked_on`，效力状态仍为 `pending`。
+
+湖北实施办法的 2017 年整理版本保留 2013 年官方底本与修改决定两份快照。清单中的 `amendments` 明确替换第 56 条第 5 款的原句和新句；构建时校验修改决定哈希、新句确在该决定中及原句唯一匹配，避免无记录地改写。第 74 条在底本网页与前条挤在同一段，清单单独登记断行修复，正文未改。
+
+公安裁量原 PDF 共 236 页；整理稿 `hb-police-discretion-2026.extract.json` 保留总则 22 条、交通管理册 29 项及其 79 档。提取时使用 pdfplumber，对表格仅继承合并单元格的前四列；逐页查看了总则和交通表页图，登记原文疑点。构建和服务运行只读取保存的整理稿，不需要安装 pdfplumber；新版本仍需重新提取、核对，不能只修改文件名或哈希。非交管管理册不进入默认检索。
+
+### PDF 资料整理
+
+新文档可以先运行 `chunk-document` 自动生成候选片段，支持 PDF、UTF-8 TXT 和 Markdown，详见 [自动分块说明](chunking.md)。候选资料记录来源位置，状态为 `needs_review`；它与正式 `LegalChunk` 格式不同，需要经过文字与业务字段核对后整理入库。
+
 1. 把新文件放入 `data/raw/`，登记原下载页、发布机关、文号和 SHA-256。
 2. 用 `extract-pdf` 提取到 `data/staging/`。空白文本页标记 `needs_ocr`，其余为 `needs_review`。
 3. 对照 PDF 页图逐项整理，跨页和合并单元格要手工关联。不要简单按固定字数截断裁量表。
@@ -32,11 +46,18 @@ ba2ef1a318f5bca73a228de21d70ff884387a1a3f233a87402c56e506fecce57
 | `document_id` | 文档身份，版本变更时保持稳定 |
 | `version_id` | 当前材料版本，不以未知生效日期命名 |
 | `item_id` | 事项身份，关联该事项的认定、处罚和裁量依据 |
-| `kind` | recognition / penalty / discretion |
-| `source.pdf_page` | PDF 物理页码，从 1 开始 |
+| `kind` | recognition / penalty / discretion / provision（法规正文）/ procedure（通则及程序依据） |
+| `source.source_type` | pdf / web，旧记录默认为 pdf |
+| `source.pdf_page` | PDF 物理页码，从 1 开始；网页必须为 null |
+| `source.locator` | 网页的条文位置，如“第四十四条” |
+| `source.retrieved_on` | 检索归档日期，不是施行日期 |
+| `source.legal_level` | 法律 / 行政法规 / 地方性法规 / 部门规章等 |
+| `document_aliases` / `article_number` | 法规名称与阿拉伯数字条号，用于准确定位 |
+| `related_excerpt_ids` | 同条法规的裁量表节选 ID；用于搜索去重，不代表旧法已废止 |
 | `source.official_url` | 确认同一文件的官方链接，未知填 null |
 | `source.verification_status` | pending / verified / superseded |
 | `source.verification_note` | 写明核对了什么、还有什么未确认 |
+| `source.supporting_sources` | 合并整理所依据的官方修改决定：标题、文件、SHA-256、官方链接及具体修改位置 |
 
 `verified` 不会自动让规则可执行，`source` 的核验状态与 `data/rules/` 的规则核验状态是两层不同信息。首版没有法规历史适用选择能力，历史案件应单独核验。
 

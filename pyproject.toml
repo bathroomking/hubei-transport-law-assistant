@@ -27,6 +27,9 @@ transport-law = "transport_law.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+transport_law = ["web/*.html", "web/*.css", "web/*.js", "web/*.svg"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

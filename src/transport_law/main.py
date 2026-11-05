@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from transport_law import __version__
 from transport_law.config import Settings
@@ -35,6 +37,8 @@ def create_app(settings: Settings | None = None, llm: LanguageModel | None = Non
         ),
         lifespan=lifespan,
     )
+    web_directory = Path(__file__).resolve().parent / "web"
+    app.mount("/static", StaticFiles(directory=web_directory), name="static")
 
     @app.exception_handler(AppError)
     async def application_error(request: Request, exc: AppError):
@@ -45,7 +49,7 @@ def create_app(settings: Settings | None = None, llm: LanguageModel | None = Non
 
     @app.get("/", include_in_schema=False)
     def index():
-        return RedirectResponse("/docs")
+        return FileResponse(web_directory / "index.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/health", tags=["状态"], summary="本地配置和资料状态（不调用模型）")
     def health(request: Request):

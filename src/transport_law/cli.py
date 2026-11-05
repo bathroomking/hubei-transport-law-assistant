@@ -36,7 +36,7 @@ def parser() -> argparse.ArgumentParser:
         if name != "chat":
             command.add_argument("--top-k", type=int, default=None)
             command.add_argument("--backend", choices=["bm25", "chroma"])
-    serve = commands.add_parser("serve", help="启动本地 API 和 /docs")
+    serve = commands.add_parser("serve", help="启动本地前端、API 和 /docs")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--reload", action="store_true")

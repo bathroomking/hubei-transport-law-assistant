@@ -10,6 +10,26 @@ from transport_law.main import create_app
 from transport_law.schemas import CaseFacts
 
 
+def test_frontend_and_assets_are_served_without_exposing_project_files(settings):
+    with TestClient(create_app(settings)) as client:
+        page = client.get("/")
+        assert page.status_code == 200
+        assert page.headers["content-type"].startswith("text/html")
+        assert 'lang="zh-CN"' in page.text
+        for filename, content_type in (
+            ("styles.css", "text/css"),
+            ("app.js", "javascript"),
+            ("favicon.svg", "image/svg+xml"),
+        ):
+            asset = client.get(f"/static/{filename}")
+            assert asset.status_code == 200
+            assert content_type in asset.headers["content-type"]
+        assert client.get("/static/.env").status_code == 404
+        assert client.get("/static/%2e%2e/config.py").status_code == 404
+        assert client.get("/health").json()["status"] == "ok"
+        assert client.get("/docs").status_code == 200
+
+
 def test_api_smoke_validation_and_missing_key(settings):
     with TestClient(create_app(settings)) as client:
         health = client.get("/health").json()

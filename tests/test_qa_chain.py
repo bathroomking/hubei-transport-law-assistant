@@ -71,12 +71,12 @@ def prompt_inputs(llm):
 
 
 @pytest.mark.parametrize("status", ["answered", None], ids=["explicit", "legacy-output"])
-def test_ask_retrieves_once_and_keeps_ranked_context(repository, ranked_documents, status):
+def test_ask_retrieves_once_and_keeps_ranked_context(ranked_documents, status):
     retriever = RankedRetriever(ranked_documents)
     llm = FakeLLM(answered_payload(ranked_documents[1].id, status=status))
     request = SearchRequest(question="本次资料说明了什么？", top_k=2)
 
-    result = asyncio.run(LawService(repository, retriever, llm, top_k=3).ask(request))
+    result = asyncio.run(LawService(retriever, llm, top_k=3).ask(request))
 
     assert retriever.calls == [(request.question, 2)]
     assert len(llm.calls) == 1
@@ -124,7 +124,7 @@ def test_stuff_chain_preserves_braces_and_data_boundaries(ranked_documents):
     assert not {"search_text", "aliases", "document_aliases"} & context[0].keys()
 
 
-def test_insufficient_evidence_keeps_retrieved_documents_and_usage(repository, ranked_documents):
+def test_insufficient_evidence_keeps_retrieved_documents_and_usage(ranked_documents):
     retriever = RankedRetriever(ranked_documents)
     llm = FakeLLM(
         {
@@ -135,7 +135,7 @@ def test_insufficient_evidence_keeps_retrieved_documents_and_usage(repository, r
     )
 
     result = asyncio.run(
-        LawService(repository, retriever, llm).ask(
+        LawService(retriever, llm).ask(
             SearchRequest(question="资料未涵盖的问题如何处理？", top_k=2)
         )
     )
@@ -152,12 +152,12 @@ def test_insufficient_evidence_keeps_retrieved_documents_and_usage(repository, r
     assert result.applicability_status == "not_verified"
 
 
-def test_no_hits_skips_llm_and_returns_empty_source_documents(repository):
+def test_no_hits_skips_llm_and_returns_empty_source_documents():
     retriever = RankedRetriever([])
     llm = FakeLLM({})
     request = SearchRequest(question="没有对应资料的问题")
 
-    result = asyncio.run(LawService(repository, retriever, llm, top_k=3).ask(request))
+    result = asyncio.run(LawService(retriever, llm, top_k=3).ask(request))
 
     assert retriever.calls == [(request.question, 3)]
     assert llm.calls == []
@@ -169,18 +169,14 @@ def test_no_hits_skips_llm_and_returns_empty_source_documents(repository):
 
 @pytest.mark.parametrize("existing_but_not_retrieved", [True, False])
 def test_ask_rejects_citations_outside_stuffed_context(
-    repository, ranked_documents, existing_but_not_retrieved
+    ranked_documents, existing_but_not_retrieved
 ):
     citation = ranked_documents[2].id if existing_but_not_retrieved else "invented-citation-id"
     retriever = RankedRetriever(ranked_documents)
     llm = FakeLLM(answered_payload(citation))
 
     with pytest.raises(AppError) as error:
-        asyncio.run(
-            LawService(repository, retriever, llm).ask(
-                SearchRequest(question="引用范围测试", top_k=2)
-            )
-        )
+        asyncio.run(LawService(retriever, llm).ask(SearchRequest(question="引用范围测试", top_k=2)))
 
     assert error.value.code == "invalid_citation"
     assert len(retriever.calls) == len(llm.calls) == 1
@@ -196,9 +192,7 @@ def test_ask_rejects_citations_outside_stuffed_context(
     ],
     ids=["empty-answered", "empty-legacy", "claims-on-refusal", "unknown-status"],
 )
-def test_invalid_answer_status_and_claims_are_rejected(
-    repository, ranked_documents, status, has_claims
-):
+def test_invalid_answer_status_and_claims_are_rejected(ranked_documents, status, has_claims):
     payload = answered_payload(ranked_documents[0].id, status=status)
     if not has_claims:
         payload["claims"] = []
@@ -206,7 +200,7 @@ def test_invalid_answer_status_and_claims_are_rejected(
 
     with pytest.raises(AppError) as error:
         asyncio.run(
-            LawService(repository, RankedRetriever(ranked_documents), llm).ask(
+            LawService(RankedRetriever(ranked_documents), llm).ask(
                 SearchRequest(question="回答状态校验测试")
             )
         )

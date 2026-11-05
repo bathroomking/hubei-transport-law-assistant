@@ -51,7 +51,7 @@ def envelope(content="测试回复", finish="stop"):
 
 def test_sources_are_filled_from_repository(repository, retriever):
     llm = FakeLLM(generated())
-    service = LawService(repository, retriever, llm)
+    service = LawService(retriever, llm)
     result = asyncio.run(service.ask(SearchRequest(question="公路挖沟怎么处理？")))
     assert result.sources == [repository.get_article("cn-highway-2017-A044")]
     assert result.applicability_status == "not_verified"
@@ -59,21 +59,19 @@ def test_sources_are_filled_from_repository(repository, retriever):
     assert "verification_status" in llm.calls[0][0][1]["content"]
 
 
-def test_outside_question_never_calls_llm(repository, retriever):
+def test_nonexistent_article_never_calls_llm(retriever):
     llm = FakeLLM("should not be called")
-    result = asyncio.run(
-        LawService(repository, retriever, llm).ask(SearchRequest(question="明天武汉天气怎么样？"))
-    )
+    result = asyncio.run(LawService(retriever, llm).ask(SearchRequest(question="公路法第999条")))
     assert result.status == "insufficient_evidence"
     assert result.sources == [] and llm.calls == []
 
 
-def test_rejects_citation_that_exists_but_was_not_retrieved(repository, retriever):
+def test_rejects_citation_that_exists_but_was_not_retrieved(retriever):
     request = SearchRequest(question="公路法第四十四条第一款", top_k=1)
     assert retriever.search(request.question, 1)[0].chunk.id == "cn-highway-2017-A044"
     llm = FakeLLM(generated(["HB-ROAD-003-BANDS"]))
     with pytest.raises(AppError) as error:
-        asyncio.run(LawService(repository, retriever, llm).ask(request))
+        asyncio.run(LawService(retriever, llm).ask(request))
     assert error.value.code == "invalid_citation"
 
 
@@ -88,10 +86,10 @@ def test_rejects_citation_that_exists_but_was_not_retrieved(repository, retrieve
         generated().replace('"claims":', '"invented_source": "example", "claims":'),
     ],
 )
-def test_rejects_bad_generated_structure(repository, retriever, content):
+def test_rejects_bad_generated_structure(retriever, content):
     with pytest.raises(AppError) as error:
         asyncio.run(
-            LawService(repository, retriever, FakeLLM(content)).ask(
+            LawService(retriever, FakeLLM(content)).ask(
                 SearchRequest(question="公路挖沟怎么处理？")
             )
         )

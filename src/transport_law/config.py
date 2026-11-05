@@ -22,8 +22,6 @@ class Settings(BaseSettings):
     law_data_path: Path = PROJECT_ROOT / "data/processed/legal_chunks.jsonl"
     discretion_data_path: Path = PROJECT_ROOT / "data/rules/road_occupation.json"
     retrieval_top_k: int = Field(default=5, ge=1, le=10)
-    # 维护工具兼容配置；在线 runtime 始终固定 hybrid。
-    retrieval_backend: Literal["bm25", "chroma", "hybrid"] = "bm25"
     hybrid_candidate_k: int = Field(default=50, ge=10, le=200)
     hybrid_rrf_k: int = Field(default=60, ge=1, le=1000)
     dashscope_api_key: SecretStr = SecretStr("")
@@ -45,8 +43,6 @@ class Settings(BaseSettings):
     chroma_collection: str = Field(default="transport_law_bailian_v4_2048_v1", min_length=3)
     knowledge_path: Path = PROJECT_ROOT / "data/local/knowledge"
     knowledge_collection: str = Field(default="transport_uploads_v4_2048_v1", min_length=3)
-    # 供存储层算法测试使用，不是产品离线模式开关。
-    knowledge_retrieval_backend: Literal["bm25", "chroma", "hybrid"] = "chroma"
     upload_max_bytes: int = Field(default=20 * 1024 * 1024, gt=0, le=100 * 1024 * 1024)
 
     @field_validator("deepseek_base_url", "dashscope_base_url")

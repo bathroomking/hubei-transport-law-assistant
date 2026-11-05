@@ -28,8 +28,6 @@ py -3.12 -m venv .venv
 ```dotenv
 DASHSCOPE_API_KEY=在本地填写百炼密钥
 DEEPSEEK_API_KEY=在本地填写DeepSeek密钥
-RETRIEVAL_BACKEND=hybrid
-KNOWLEDGE_RETRIEVAL_BACKEND=hybrid
 ```
 
 完整的地址、模型和超时配置见 [.env.example](.env.example)。真实密钥只放本地 `.env`，该文件已被 Git 忽略；修改配置后重启服务。前端不会收到模型密钥。
@@ -77,7 +75,7 @@ python -m transport_law serve --reload
 python -m transport_law ask "根据公路法第四十四条，占用、挖掘公路需要履行哪些手续？"
 ```
 
-面向使用者的 CLI 入口为 `ask` 和 `serve`。不再提供独立的 `retrieve`、`chat` 或结构化 `check-facts` 入口。算法比较、资料校验和入库命令仍供维护使用。
+面向使用者的 CLI 入口为 `ask` 和 `serve`。算法比较、资料校验和入库命令供维护使用。
 
 ### 看清资料收录范围
 
@@ -140,14 +138,14 @@ src/transport_law/
   retrieval.py     BM25、法规名称与条号约束
   embeddings.py    百炼向量接口、校验与重试
   vector_store.py  Chroma 持久化、续传与父法条回填
-  hybrid.py        RRF 融合及受限候选的维护评测检索器
+  hybrid.py        RRF 融合与正式法规库算法评测检索器
   online.py        双库全局 BM25/dense 排名、统一问答与密钥检查
   knowledge.py     上传登记、后台分块入库与上传资料检索
   llm.py           DeepSeek 请求、超时和错误处理
   prompts.py       解释、引用与缺失信息的提示词
   qa.py            PromptTemplate 与原文拼接
   service.py       问答流程、引用校验与可信来源回填
-  discretion.py    保留的内部事实检查与规则草稿模块
+  discretion.py    裁量规则草稿及来源引用校验
   runtime.py       装配在线问答和维护所需组件
   main.py          API 与前端静态资源
   web/             单页问答，无前端构建依赖
@@ -194,4 +192,10 @@ Chroma 和 hybrid 评测会调用百炼；BM25 评测及使用替身的测试可
 
 **资料效力与个案适用尚需核验。**助手可解释材料和提示缺失事实，不自动认定用户未提供的事实、不自动选定处罚档次或计算确定罚款。引用校验确认出处属于本次检索，不保证模型解释得到原文充分支持。
 
-设计细节见 [架构说明](docs/architecture.md) 和 [在线问答链](docs/qa-chain.md)，历史检查与调用证据见 [验证记录](docs/validation.md)。
+设计与维护文档：
+
+- [架构与数据边界](docs/architecture.md)、[在线问答链](docs/qa-chain.md)、[混合检索](docs/hybrid-retrieval.md)
+- [资料来源与整理](docs/data-guide.md)、[分块工具](docs/chunking.md)、[向量索引](docs/vector-retrieval.md)、[上传管理](docs/knowledge-upload.md)
+- [统一问答与上传验收记录](docs/unified-validation.md)、[早期数据与索引验证记录](docs/validation.md)
+
+验证记录描述对应版本当时的检查结果；代码或候选范围改变后，应重新运行检查，不能直接沿用历史通过率。

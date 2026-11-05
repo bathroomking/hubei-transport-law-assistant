@@ -22,9 +22,7 @@ def build_runtime(
     *,
     retriever: Retriever | None = None,
 ) -> Runtime:
-    settings = (settings or Settings()).model_copy(
-        update={"retrieval_backend": "hybrid", "knowledge_retrieval_backend": "hybrid"}
-    )
+    settings = settings or Settings()
     curated = LawRepository.from_jsonl(settings.law_data_path)
     knowledge = KnowledgeStore(
         settings, reserved_filenames=[chunk.source.file for chunk in curated.all_chunks]
@@ -34,7 +32,6 @@ def build_runtime(
         settings=settings,
         repository=repository,
         service=OnlineLawService(
-            repository,
             retriever if retriever is not None else UnifiedRetriever(curated, knowledge, settings),
             llm or DeepSeekClient(settings),
             top_k=settings.retrieval_top_k,

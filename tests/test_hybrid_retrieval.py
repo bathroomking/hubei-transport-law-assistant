@@ -56,15 +56,19 @@ def hybrid(repository, settings, monkeypatch):
 @pytest.mark.parametrize(
     "question",
     [
-        "武汉明天天气怎样？",
-        "个人所得税专项附加扣除如何计算？",
         "道路交通安全法第999条",
         "湖北公安交管裁量交通管理册第99项",
     ],
 )
-def test_empty_scope_and_nonexistent_articles_never_call_embedding(hybrid, question):
+def test_nonexistent_articles_never_call_embedding(hybrid, question):
     assert hybrid.search(question) == []
     assert hybrid.dense.calls == []
+
+
+@pytest.mark.parametrize("question", ["喝了点酒开车会怎么样？", "个人所得税如何计算？"])
+def test_unrestricted_questions_reach_both_rankers(hybrid, question):
+    assert hybrid.search(question)
+    assert hybrid.dense.calls[0][1] == [chunk.id for chunk in hybrid.bm25.chunks]
 
 
 def test_explicit_excerpt_id_remains_available_without_embedding(hybrid):
@@ -194,13 +198,24 @@ def test_cli_local_validation_does_not_build_online_runtime(settings, monkeypatc
     assert result["rule_status"] == "draft"
 
 
-def test_cli_default_evaluation_remains_offline(settings, monkeypatch, capsys):
+def test_cli_default_evaluation_remains_offline(settings, monkeypatch, capsys, tmp_path):
     def unexpected_runtime(*args, **kwargs):
         pytest.fail("检索评估不得初始化在线问答运行时")
 
     monkeypatch.setattr("transport_law.cli.Settings", lambda: settings)
     monkeypatch.setattr("transport_law.cli.build_runtime", unexpected_runtime)
-    assert run(parser().parse_args(["evaluate"])) == 0
+    dataset = tmp_path / "evaluation.jsonl"
+    dataset.write_text(
+        json.dumps(
+            {
+                "id": "article",
+                "question": "公路法第44条",
+                "expected_ids": ["cn-highway-2017-A044"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert run(parser().parse_args(["evaluate", "--dataset", str(dataset)])) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["backend"] == "bm25"
     assert result["passed"] == result["total"] > 0

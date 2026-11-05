@@ -99,12 +99,6 @@ class SearchHit(Model):
     retrieval: HybridScore | None = None
 
 
-class SearchResponse(Model):
-    question: str
-    hits: list[SearchHit]
-    coverage: list[str]
-
-
 class Claim(Model):
     text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
     citation_ids: list[Identifier] = Field(min_length=1, max_length=10)
@@ -160,28 +154,3 @@ class DiscretionRuleSet(Model):
     bands: list[DiscretionBand] = Field(min_length=1)
     unresolved_boundaries_m2: list[Decimal]
     review_notes: list[Text] = Field(min_length=1)
-
-
-class CaseFacts(Model):
-    """只收集用户显式提供的事实；不将口语描述自动认定为法律事实。"""
-
-    item_id: Identifier = "road_occupation_excavation"
-    region: Text | None = None
-    location: Text | None = None
-    occurred_on: date | None = None
-    road_type: Literal["ordinary_highway", "expressway", "urban_road", "other"] | None = None
-    behavior: Literal["occupation", "excavation", "both"] | None = None
-    has_permission: bool | None = Field(default=None, strict=True)
-    area_m2: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=4)
-    facts_verified: bool = Field(default=False, strict=True)
-
-
-class DiscretionCheck(Model):
-    status: Literal["needs_facts", "needs_review", "out_of_scope"]
-    missing_fields: list[str]
-    follow_up_questions: list[str]
-    review_notes: list[str]
-    rule_set: DiscretionRuleSet | None
-    sources: list[LegalChunk]
-    # 首版草稿规则没有确定金额的输出通道。
-    applicability_status: Literal["not_verified"] = "not_verified"

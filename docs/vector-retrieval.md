@@ -1,6 +1,6 @@
 # 阿里云百炼 text-embedding-v4 与 ChromaDB
 
-向量生成直连阿里云百炼 DashScope 原生 HTTP API，模型为 `text-embedding-v4`（Qwen3 Embedding 系列），默认请求 2048 维、每批 10 条。ChromaDB 负责本地持久化和 cosine 检索。DeepSeek 仍负责读取检索到的原文、生成带引用的解释。默认保留 `bm25`，可通过 `.env` 或命令行选择 `chroma`。本接入使用百炼的 v4 产品规格，不将其等同于开源 Qwen3 Embedding 8B 的参数或输出维度。
+向量生成直连阿里云百炼 DashScope 原生 HTTP API，模型为 `text-embedding-v4`（Qwen3 Embedding 系列），默认请求 2048 维、每批 10 条。ChromaDB 负责本地持久化和 cosine 检索。DeepSeek 仍负责读取检索到的原文、生成带引用的解释。在线问答固定使用 BM25 + Chroma + RRF；独立算法选项仅供 `evaluate --backend` 维护评测使用。本接入使用百炼的 v4 产品规格，不将其等同于开源 Qwen3 Embedding 8B 的参数或输出维度。
 
 ## 首次使用
 
@@ -20,12 +20,11 @@ EMBEDDING_DIMENSIONS=2048
 EMBEDDING_BATCH_SIZE=10
 CHROMA_PATH=data/local/chroma
 CHROMA_COLLECTION=transport_law_bailian_v4_2048_v1
-RETRIEVAL_BACKEND=bm25
 ```
 
 默认地址对应北京地域，Key 必须在相应地域创建。百炼也提供业务空间专属域名，例如 `https://你的业务空间ID.cn-beijing.maas.aliyuncs.com/api/v1`；可以直接填入 `DASHSCOPE_BASE_URL`。新加坡传统地址为 `https://dashscope-intl.aliyuncs.com/api/v1`。使用原生接口地址，路径须为 `/api/v1`，不要填 `/compatible-mode/v1`。客户端通过 HTTPX 发请求，不需要安装 DashScope SDK。
 
-真实密钥只写本地 `.env`，`.env.example` 保持空值并作为新环境的配置模板保留。程序只读取 `DASHSCOPE_API_KEY`；旧 `OPENROUTER_API_KEY`、`OPENROUTER_BASE_URL` 可从本地配置删除。
+真实密钥只写本地 `.env`，`.env.example` 保持空值并作为新环境的配置模板保留。向量接口使用 `DASHSCOPE_API_KEY`。
 
 先校验已有批次。预检不需要 Key、不调用模型、不创建数据库：
 
@@ -42,13 +41,12 @@ python -m transport_law index-vectors \
 python -m transport_law index-vectors \
   --documents data/staging/document_batch_20261104/langchain_documents.jsonl
 python -m transport_law vector-status
-python -m transport_law retrieve "公路挖沟有哪些依据？" --backend chroma
-python -m transport_law retrieve "公路挖沟有哪些依据？" --backend bm25
+python -m transport_law ask "公路挖沟有哪些依据？"
 ```
 
 进度输出到 stderr，最后的 JSON 报告写到 stdout。`embedded` 是本次新生成的数量，`reused` 是已存在并核对一致的数量。密钥只用于服务端 HTTP 认证，不存入 Chroma，不发送到前端或报告。
 
-网页/API 要使用向量检索，需要在 `.env` 设置 `RETRIEVAL_BACKEND=chroma` 并重启服务。向量索引须先完成；索引缺失、未完成或配置不一致时会明确报错。`retrieve`、`ask`、`evaluate` 的 `--backend` 只覆盖当前命令，不改 `.env`。`validate-data` 和 `check-facts` 始终可离线运行。
+向量索引须先完成；索引缺失、未完成或配置不一致时会明确报错。`ask` 还需要 DeepSeek 密钥，使用与网页相同的统一问答链。仅 `evaluate` 提供 `--backend` 算法选项；`validate-data` 只做本地资料和规则来源校验。
 
 ## 入库和检索规则
 
@@ -57,8 +55,8 @@ python -m transport_law retrieve "公路挖沟有哪些依据？" --backend bm25
 - 明确传入 `embedding_function=None`，入库使用 `embeddings`，查询使用 `query_embeddings`。不下载 Chroma 的默认 embedding 模型。
 - 从原生响应的 `output.embeddings` 读取向量，按 `index`（兼容旧响应的 `text_index`）重排，验证条数、维度、有限数值和非零向量，做 L2 归一化后写入。`EMBEDDING_DIMENSIONS` 通过 `parameters.dimension` 显式发送给服务端，同时校验返回长度；支持 64、128、256、512、768、1024、1536、2048。批次大小只允许 1–10，超出在本地拦截。
 - Chroma 保存稳定子块 ID、向量、原文和 metadata。常用字段展开以供过滤，完整原法条出处保存在 `provenance_json` 字符串中。真正的 PDF 页码与官方 URL 来自父法条，分块中间 TXT 的字符位置不会充当 PDF 页码。
-- 先执行现有法规名、条号、事项别名等范围约束，再对候选子块进行向量排序。明确父条目 ID 可直接定位；范围外问题返回空且不调用 embedding。此阶段没有取消主题词约束，也没有实现全库语义召回、混合融合或 reranker。
-- 多个子块命中同一法条时只返回一次，以最佳子块相似度排序；候选不足时扩大向量结果集。返回完整父法条和其原有 ID，因此既有引用校验、出处展示和评测集继续适用。
+- 未指定法规时在全库召回；指定法规名、条号、裁量表项时按明确引用约束候选。父条目 ID 可直接定位，不存在的明确条号返回空。自然语言问题不再经过人工事项白名单；候选的法律相关性与资料不足拒答由问答阶段核对。
+- 多个子块命中同一法条时只返回一次，以最佳子块相似度排序；候选不足时扩大向量结果集。返回完整父法条和其原有 ID，保持引用校验和出处展示。
 - 向量检索的 `score = 1 - cosine distance`，不是法律适用概率，也不能与 BM25 得分直接比较。向量相近仍需核对原文；当前没有经真实数据标定的相似度拒答阈值。
 
 ## 重复执行、失败和更新
@@ -82,6 +80,8 @@ python -m transport_law evaluate --dataset evals/official_retrieval.jsonl --back
 python -m transport_law evaluate --dataset evals/traffic_police_retrieval.jsonl --backend chroma
 ```
 
-Chroma 评测会使用阿里云百炼额度。比较各题的父法条 ID、`recall_at_k` 和范围外问题结果；通过才考虑切换默认。离线测试使用模拟 API/向量及临时 Chroma 数据库，验证的是接线、持久化、续传、配置拦截和引用链路，不能证明真实模型的检索效果或连通性。
+Chroma 评测会使用阿里云百炼额度。比较各题的父法条 ID 和 `recall_at_k`。历史题集中的范围外空结果预期来自早期事项白名单，不能等同于全库问答阶段的拒答；原题和期望保持不变，以便追踪差异。离线测试使用模拟 API/向量及临时 Chroma 数据库，验证的是接线、持久化、续传、配置拦截和引用链路，不能证明真实模型的检索效果或连通性。
+
+2026-11-05 接入阶段曾完成真实百炼调用、1,338 个向量入库、跨进程读取、重复入库复用和 API 原文来源回填检查。三组开发回归中 Chroma 分别通过 20/20、20/20、25/30，BM25 分别为 20/20、20/20、30/30；公安交管组有 5 题未找全前 5 条内的预期法条。当时已用精确余弦排序复核这些遗漏。上述数字属于已移除的事项限制路径，不适用于当前全库候选；历史详情见 [验证记录](validation.md)，当前链路检查见 [统一验收记录](unified-validation.md)。
 
 接口依据：[百炼文本向量原生接口](https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api)、[text-embedding-v4 模型说明](https://help.aliyun.com/zh/model-studio/text-embedding-v4)、[百炼域名迁移说明](https://help.aliyun.com/zh/model-studio/embedding-interfaces-compatible-with-openai)、[Chroma 入库](https://docs.trychroma.com/docs/collections/add-data)、[Chroma collection 配置](https://docs.trychroma.com/docs/collections/configure)。

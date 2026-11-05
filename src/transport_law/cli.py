@@ -7,7 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel, ValidationError
 
 from transport_law.config import PROJECT_ROOT, Settings
-from transport_law.discretion import DiscretionService
+from transport_law.discretion import load_discretion_rules
 from transport_law.errors import AppError
 from transport_law.evaluation import evaluate_retrieval
 from transport_law.ingest import extract_pdf
@@ -114,12 +114,12 @@ def run(args) -> int:
     if args.command == "validate-data":
         # 维护检查只读取本地资料和规则，不初始化在线问答运行时。
         repository = LawRepository.from_jsonl(settings.law_data_path)
-        discretion = DiscretionService(settings.discretion_data_path, repository)
+        rules = load_discretion_rules(settings.discretion_data_path, repository)
         print_json(
             {
                 "status": "ok",
                 "chunks": len(repository.searchable),
-                "rule_status": discretion.rule_set.review_status,
+                "rule_status": rules.review_status,
             }
         )
         return 0

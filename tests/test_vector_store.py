@@ -208,7 +208,6 @@ def test_index_persists_reuses_vectors_and_returns_full_parent_sources(vector_fi
         text in repository.get_article(meta["parent_id"]).text
         for text, meta in zip(stored["documents"], stored["metadatas"], strict=True)
     )
-    assert retriever.search("明天武汉天气如何？") == []
     assert retriever.search("测试公路法第999条") == []
     assert retriever.search("test-A001")[0].chunk.id == "test-A001"
     assert len(embedder.queries) == 1
@@ -333,7 +332,7 @@ def test_cli_preflight_works_without_key_or_chroma_runtime(vector_fixture, monke
     settings, _, path = vector_fixture
     monkeypatch.setattr(
         "transport_law.cli.Settings",
-        lambda: settings.model_copy(update={"retrieval_backend": "chroma"}),
+        lambda: settings,
     )
     assert run(parser().parse_args(["index-vectors", "--documents", str(path), "--dry-run"])) == 0
     assert json.loads(capsys.readouterr().out)["status"] == "validated"

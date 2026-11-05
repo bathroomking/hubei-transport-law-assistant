@@ -1,4 +1,6 @@
-# 验证记录
+# 历史验证记录
+
+本文保留各阶段的验证证据；其中旧命令、算法默认值和受限候选指标不代表当前产品。当前操作见 [README](../README.md)，统一问答及代码清理的验证见 [统一验收记录](unified-validation.md)。
 
 ## 2026-11-05：分批发布前检查
 
@@ -14,13 +16,29 @@
 - 全量 `pytest -q`：166 项通过，其中 53 项覆盖向量接入。使用 DashScope 原生 HTTP 模拟响应验证 `output.embeddings`、`index`/`text_index` 对齐、文档/查询 `text_type`、查询 `instruct`、维度与每批 10 条限制，以及服务未开通、欠费、认证和权限错误分类。
 - 真实 Chroma 临时库验证新进程读取、同批次复用、失败续传、服务商/模型/语料不一致拦截和 API 引用回填；另验证百炼原生模拟响应到 Chroma 入库及查询的完整链路。
 - Chroma 的配置读取产生 16 条依赖库自身的 `legacy embedding function config` 弃用提示；本次调用均显式设置 `embedding_function=None` 并传入向量，不启用默认 embedding 模型。
-- BM25 三个回归集分别 20/20、20/20、30/30 通过；`recall_at_k` 均为 1.0。这些结果只验证原基线没有回归，不能作为 Qwen 检索效果。
-- 现有 `document_batch_20261104/langchain_documents.jsonl` 通过 `index-vectors --dry-run`：1,338 个子块、1,336 个父法条；配置为 `text-embedding-v4`、2048 维，每批 10 条；没有写正式向量库。
+- 现有 `document_batch_20261104/langchain_documents.jsonl` 通过 `index-vectors --dry-run`：1,338 个子块、1,336 个父法条；配置为 `text-embedding-v4`、2048 维，每批 10 条。入库前核对完整批次为公开法规、裁量条目及原上传资料的 5 条法条节选，不含案件事实；请求正文只发送法规标题、条号和片段正文。
 - Ruff、`git diff --check` 和前端 JavaScript 语法检查通过。
 - 已按要求从本地 `.env` 删除未使用的 `OPENROUTER_API_KEY` 和 `OPENROUTER_BASE_URL`，其余有效配置及凭据保持原值。项目不存在 `.env.enviromet`；保留文档和测试引用的 `.env.example`，其中 API Key 均为空。
-- 用户配置百炼密钥后，已真实请求北京地域的 `text-embedding-v4` 接口；诊断返回 HTTP 403、`AccessDenied.Unpurchased`。已确认运行时读取的密钥与 `.env` 一致，无环境变量覆盖或首尾空白；未取得有效向量，未开始全量入库，正式 Chroma 数据库尚未创建。
-- 根据[百炼错误码说明](https://help.aliyun.com/zh/model-studio/error-code)，需核对该账号及地域的服务开通资格。客户端现单独返回 `embedding_not_activated`，不再将此错误归为密钥认证失败；不会回显上游原始消息或自动重试该类错误。
-- 默认仍为 BM25。完成账号服务开通后，按 [向量检索说明](vector-retrieval.md) 继续在线入库及向量召回评测；当前离线测试结果不能作为真实模型连通性或检索效果的证明。
+- 首次在线请求返回 HTTP 403、`AccessDenied.Unpurchased`；用户完成百炼服务开通后重试成功。2 条文档和 1 条查询均取得 2048 维向量，客户端归一化后范数均为 1。运行时读取的密钥与 `.env` 一致，无环境变量覆盖或首尾空白。
+- 根据[百炼错误码说明](https://help.aliyun.com/zh/model-studio/error-code)，客户端单独返回 `embedding_not_activated`，不再将服务未开通归为密钥认证失败；不会回显上游原始消息或自动重试该类错误。
+- 已完成真实全量入库：`transport_law_bailian_v4_2048_v1`，本地目录 `data/local/chroma/`，1,338 个向量、1,336 个父法条，状态 `ready`。新进程 `vector-status` 读取成功；重复执行同批入库得到 `embedded: 0`、`reused: 1338`，完整复用已有向量。
+- 本地 FastAPI TestClient 使用真实百炼查询向量和已保存的 Chroma 索引，`POST /api/v1/retrieve` 返回 200；“公路挖沟有哪些依据？”返回 5 条结果，其完整正文、法条 ID 和来源与 `/api/v1/articles/{id}` 逐条一致。未调用 DeepSeek，未启动或重启用户服务。
+
+对同一当前语料、相同范围约束和 `top_k=5` 进行真实在线对照，70 条用例去重为 69 个问题，其中 58 个需要在线查询向量；评测过程无接口错误：
+
+| 回归集 | BM25 通过数 | Chroma 通过数 | BM25 正例平均 Recall@5 | Chroma 正例平均 Recall@5 |
+| --- | --- | --- | --- | --- |
+| `evals/retrieval.jsonl` | 20/20 | 20/20 | 1.0000 | 1.0000 |
+| `evals/official_retrieval.jsonl` | 20/20 | 20/20 | 1.0000 | 1.0000 |
+| `evals/traffic_police_retrieval.jsonl` | 30/30 | 25/30 | 1.0000 | 0.8782 |
+
+正例只有在全部预期父法条进入前 5 条时才算通过；负例须返回空结果。Chroma 合计 65/70，BM25 为 70/70，范围外用例均通过。未通过的是 `scene-red-light`、`scene-right-turn`、`scene-alcohol`、`scene-ebike` 和 `points-red-light`；这不是生成答案准确率，也不证明全部法规效力或个案法律判断正确。
+
+对这 5 题另行复查：预期法条全部存在于完整索引及候选集合；Chroma 的前 5 条与全部候选向量的精确余弦排序一致。遗漏来自当前向量排序，而非缺少记录、范围过滤或近似索引偏差。例如转弯让行用例所需条文排第 6，酒后事故处理程序条文排第 9，“闯红灯扣几分？”的预期记分条文排第 34；单纯扩大到前 10 条也不能解决全部遗漏。
+
+因此当时 `.env` 的 `RETRIEVAL_BACKEND` 保留 `bm25`；Chroma 已可通过 `--backend chroma` 独立使用，但这次结果不足以支持替换原默认。命令和配置见 [向量检索说明](vector-retrieval.md)。本次没有改动回归题或期望 ID 来提高通过数，也没有改成混合检索。BM25 本身包含领域别名与法规定位规则，这组开发回归结果不能推广为不同模型的一般优劣。
+
+完整本地结果保存在被 Git 忽略的 `data/local/validation/bm25_20261105.json`、`chroma_20261105.json`、`chroma_diagnostics_20261105.json` 和 `api_chroma_20261105.json`；在线评测与诊断脚本也保存在该目录。这些验证报告不保存密钥或原始向量数值。
 
 ## 2026-11-04 全量已整理资料重新分块
 

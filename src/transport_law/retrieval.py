@@ -1,4 +1,4 @@
-"""BM25 关键词排序及法规、条号、事项的共同范围约束。"""
+"""BM25 关键词排序及法规、条号定位。"""
 
 import math
 import re
@@ -45,29 +45,14 @@ class BM25Retriever:
         self.average_length = sum(self.lengths) / max(1, len(self.lengths)) or 1
         self.document_frequency = Counter(term for terms in self.terms for term in terms)
 
-    def _candidate_items(self, question: str) -> set[str]:
-        # 通用词（公路、罚款、湖北）不能单独把范围外问题召回到本事项。
-        candidate_items = {
-            chunk.item_id
-            for chunk in self.chunks
-            if any(normalize(alias) in question for alias in chunk.aliases)
-            or normalize(chunk.id) in question
-        }
-        # 第一事项的口语组合匹配；只产生候选事项，不认定道路属性或许可状态。
-        roads = ("公路", "道路", "路边", "路旁", "路上", "路面", "国道", "省道", "县道", "乡道")
-        actions = ("挖", "开沟", "开槽", "破路", "占用", "占了", "占着", "占道")
-        if any(word in question for word in roads) and any(word in question for word in actions):
-            candidate_items.add("road_occupation_excavation")
-        return candidate_items
-
     def explicit_chunks(self, question: str) -> list[LegalChunk]:
         normalized_question = normalize(question)
         return [
             chunk for ident, chunk in self.by_id.items() if normalize(ident) in normalized_question
         ]
 
-    def candidate_chunks(self, question: str, *, broad: bool = False) -> list[LegalChunk]:
-        """保留指定法规/条号；在线白话问答可在未指定法规时搜索全库。"""
+    def candidate_chunks(self, question: str) -> list[LegalChunk]:
+        """未指定法规时搜索全库；指定法规、条号或表项时保留定位约束。"""
         normalized_question = normalize(question)
         names = {
             (normalize(alias), chunk.document_id)
@@ -88,7 +73,6 @@ class BM25Retriever:
         }
         article_refs = re.findall(r"第[0-9一二三四五六七八九十百零〇]+条", normalized_question)
         table_ref = re.search(r"交通管理册第[0-9]+项", normalized_question)
-        candidate_items = self._candidate_items(normalized_question)
         candidates = []
         for chunk in self.chunks:
             if named_documents:
@@ -101,8 +85,6 @@ class BM25Retriever:
                     continue
                 if table_ref and table_ref[0] not in normalize(chunk.article):
                     continue
-            elif not broad and chunk.item_id not in candidate_items:
-                continue
             candidates.append(chunk)
         return candidates
 

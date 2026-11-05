@@ -4,7 +4,6 @@ import re
 from fastapi.testclient import TestClient
 
 from transport_law.config import PROJECT_ROOT
-from transport_law.evaluation import evaluate_retrieval
 from transport_law.main import create_app
 
 
@@ -118,9 +117,3 @@ def test_police_sources_are_available_through_api(settings, retriever):
         assert body["articles"][-1]["id"] == "hb-police-discretion-2026-T029"
         # 问答产品不开放独立裁量接口。
         assert client.get("/api/v1/discretion/hb-police-discretion").status_code == 404
-
-
-def test_traffic_police_retrieval_regressions(retriever):
-    report = evaluate_retrieval(PROJECT_ROOT / "evals/traffic_police_retrieval.jsonl", retriever)
-    assert report["total"] == 30
-    assert report["passed"] == report["total"], report

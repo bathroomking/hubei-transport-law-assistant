@@ -1,14 +1,11 @@
 import builtins
-from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr
 
-from transport_law.discretion import DiscretionService
 from transport_law.main import create_app
 from transport_law.retrieval import BM25Retriever
-from transport_law.schemas import CaseFacts
 
 
 def test_frontend_and_assets_are_served_without_exposing_project_files(settings):
@@ -94,66 +91,3 @@ def test_service_restart_and_retrieval_do_not_load_chunking_dependencies(setting
             assert response.json() == hits[0].chunk.model_dump(mode="json")
             results.append(hits)
     assert results[0] and results[0] == results[1]
-
-
-@pytest.mark.parametrize("area", ["19.9999", "20", "20.0001", "39.9999", "40", "40.0001"])
-def test_draft_rules_never_produce_case_penalty(settings, repository, area):
-    service = DiscretionService(settings.discretion_data_path, repository)
-    result = service.evaluate_rules(
-        CaseFacts(
-            region="湖北省",
-            location="测试县测试路段",
-            occurred_on="2026-10-01",
-            road_type="ordinary_highway",
-            behavior="excavation",
-            has_permission=False,
-            area_m2=area,
-            facts_verified=True,
-        )
-    )
-    assert result.status == "needs_review"
-    assert result.missing_fields == []
-    assert result.applicability_status == "not_verified"
-    assert "fine_amount" not in result.model_dump()
-    boundary_note = any("恰好" in note for note in result.review_notes)
-    assert boundary_note == (Decimal(area) in (Decimal(20), Decimal(40)))
-
-
-def test_false_permission_is_present_not_missing(settings, repository):
-    result = DiscretionService(settings.discretion_data_path, repository).evaluate_rules(
-        CaseFacts(has_permission=False)
-    )
-    assert "has_permission" not in result.missing_fields
-    assert "road_type" in result.missing_fields
-
-
-@pytest.mark.parametrize(
-    "data",
-    [
-        {"region": "湖南省"},
-        {"road_type": "expressway"},
-        {"road_type": "urban_road"},
-        {"item_id": "other"},
-    ],
-)
-def test_scope_is_checked(settings, repository, data):
-    result = DiscretionService(settings.discretion_data_path, repository).evaluate_rules(
-        CaseFacts(**data)
-    )
-    assert result.status == "out_of_scope"
-    assert result.sources == []
-
-
-@pytest.mark.parametrize(
-    "data",
-    [
-        {"area_m2": 0},
-        {"area_m2": -1},
-        {"area_m2": "NaN"},
-        {"area_m2": "Infinity"},
-        {"has_permission": "false"},
-    ],
-)
-def test_fact_validation(data):
-    with pytest.raises(ValidationError):
-        CaseFacts.model_validate(data)

@@ -12,6 +12,8 @@ from pydantic import SecretStr
 from transport_law.errors import AppError
 from transport_law.llm import Completion
 from transport_law.main import create_app
+from transport_law.online import UnifiedRetriever
+from transport_law.repository import LawRepository
 
 pytest.importorskip("chromadb")
 pytest.importorskip("langchain_text_splitters")
@@ -19,9 +21,14 @@ pytest.importorskip("langchain_text_splitters")
 BASE = "/api/v1/knowledge"
 
 
+def uploaded_retriever(client):
+    store = client.app.state.knowledge
+    return UnifiedRetriever(LawRepository([]), store, store.settings, store.embedder)
+
+
 def uploaded_hits(client, question, top_k=5):
     return [
-        hit.model_dump(mode="json") for hit in client.app.state.knowledge.search(question, top_k)
+        hit.model_dump(mode="json") for hit in uploaded_retriever(client).search(question, top_k)
     ]
 
 
@@ -144,14 +151,10 @@ def test_duplicate_name_is_rejected_without_reprocessing_even_after_restart(uplo
             assert len(client.get(f"{BASE}/documents").json()) == 1
 
 
-@pytest.mark.parametrize("backend", ["bm25", "chroma", "hybrid"])
-def test_new_document_only_embeds_new_chunks_and_is_visible_without_restart(upload_setup, backend):
+def test_new_document_only_embeds_new_chunks_and_is_visible_without_restart(upload_setup):
     settings, embedder = upload_setup
-    settings = settings.model_copy(update={"knowledge_retrieval_backend": backend})
     with TestClient(create_app(settings)) as client:
         assert client.get("/health").json()["retrieval_backend"] == "hybrid"
-        # 存储层仍覆盖三种算法；产品问答入口固定在线混合检索。
-        client.app.state.knowledge.settings = settings
         assert uploaded_hits(client, "document") == []
         for name, text in [("one.txt", b"First document."), ("two.md", b"Second document.")]:
             response = client.post(f"{BASE}/documents", files={"file": (name, text)})
@@ -159,16 +162,15 @@ def test_new_document_only_embeds_new_chunks_and_is_visible_without_restart(uplo
             # 查询后再追加，BM25 不得一直使用第一次请求的过期快照。
             hits = uploaded_hits(client, "document")
             assert any(hit["chunk"]["source"]["file"] == name for hit in hits)
-            if backend == "hybrid":
-                assert all(hit["retrieval"]["bm25_rank"] for hit in hits)
-                assert all(hit["retrieval"]["dense_rank"] for hit in hits)
+            assert all(hit["retrieval"]["bm25_rank"] for hit in hits)
+            assert all(hit["retrieval"]["dense_rank"] for hit in hits)
         assert len(embedder.calls) == 2
         assert len(embedder.successful_texts) == 2
         assert {hit["chunk"]["source"]["file"] for hit in uploaded_hits(client, "document")} == {
             "one.txt",
             "two.md",
         }
-        assert len(embedder.queries) == (0 if backend == "bm25" else 3)
+        assert len(embedder.queries) == 3
 
 
 def test_filename_of_existing_curated_source_is_also_reserved(upload_setup, repository):
@@ -325,14 +327,11 @@ def test_restart_reads_ready_documents_without_chunking_or_embedding(upload_setu
         assert client.get("/health").status_code == 200
 
 
-@pytest.mark.parametrize("backend", ["bm25", "chroma", "hybrid"])
-def test_partial_failed_vectors_do_not_hide_ready_document(upload_setup, backend):
+def test_partial_failed_vectors_do_not_hide_ready_document(upload_setup):
     settings, embedder = upload_setup
-    settings = settings.model_copy(update={"knowledge_retrieval_backend": backend})
     embedder.fail_on_call = 2
     text = "\n".join(f"# Section {number}\nUnfinished permit {number}." for number in range(7))
     with TestClient(create_app(settings)) as client:
-        client.app.state.knowledge.settings = settings
         response = client.post(f"{BASE}/documents", files={"file": ("failed.md", text.encode())})
         document_id = response.json()["id"]
         assert client.get(f"{BASE}/documents/{document_id}").json()["status"] == "failed"
@@ -374,7 +373,7 @@ def test_same_job_cannot_run_or_retry_concurrently(upload_setup, monkeypatch):
                 other_worker.retry(document_id)
             assert error.value.code == "upload_busy"
             assert error.value.status_code == 409
-            assert other_worker.search("running task") == []
+            assert other_worker.ready_chunks() == []
         finally:
             release.set()
         running.result(timeout=10)
@@ -412,7 +411,7 @@ def test_interrupted_task_requires_explicit_retry_and_reuses_saved_chunks(
     assert record["status"] == "failed"
     assert record["error_code"] == "job_interrupted"
     assert not embedder.calls
-    assert restarted.search("recover") == []
+    assert restarted.ready_chunks() == []
     monkeypatch.setattr(embedder, "embed_documents", original)
     assert restarted.retry(document_id)["status"] == "queued"
     restarted.process(document_id)
@@ -420,10 +419,8 @@ def test_interrupted_task_requires_explicit_retry_and_reuses_saved_chunks(
     assert len(embedder.calls) == 1
 
 
-@pytest.mark.parametrize("backend", ["chroma", "hybrid"])
-def test_uploaded_qa_uses_stored_sources_and_rejects_invented_citations(upload_setup, backend):
+def test_uploaded_qa_uses_stored_sources_and_rejects_invented_citations(upload_setup):
     settings, _ = upload_setup
-    settings = settings.model_copy(update={"knowledge_retrieval_backend": backend})
 
     class FakeLLM:
         forged = False
@@ -445,8 +442,7 @@ def test_uploaded_qa_uses_stored_sources_and_rejects_invented_citations(upload_s
 
     llm = FakeLLM()
     with TestClient(create_app(settings, llm)) as client:
-        client.app.state.knowledge.settings = settings
-        client.app.state.runtime.service.retriever = client.app.state.knowledge
+        client.app.state.runtime.service.retriever = uploaded_retriever(client)
         assert client.app.state.runtime.knowledge is client.app.state.knowledge
         assert (
             client.post(

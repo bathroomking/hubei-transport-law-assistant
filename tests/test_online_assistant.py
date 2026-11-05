@@ -83,7 +83,7 @@ def test_unified_ask_merges_both_libraries_and_publishes_ready_sources_without_r
 ):
     settings, repository, embedder = online_index
     question = "那我接下来该咋办呀？"
-    assert BM25Retriever(repository).candidate_chunks(question) == []
+    assert BM25Retriever(repository).candidate_chunks(question) == repository.searchable
     llm = EvidenceLLM()
     with TestClient(create_app(settings, llm)) as client:
         runtime = client.app.state.runtime
@@ -173,7 +173,7 @@ def test_sparse_and_dense_ranks_are_global_across_libraries(online_index):
 )
 def test_everyday_language_reaches_dense_retrieval_without_aliases(online_index, question):
     settings, repository, embedder = online_index
-    assert BM25Retriever(repository).candidate_chunks(question) == []
+    assert BM25Retriever(repository).candidate_chunks(question) == repository.searchable
     retriever = UnifiedRetriever(repository, KnowledgeStore(settings), settings, embedder)
     hits = retriever.search(question)
     assert {hit.chunk.id for hit in hits} == {chunk.id for chunk in repository.searchable}

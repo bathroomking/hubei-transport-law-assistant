@@ -56,7 +56,7 @@ class UnifiedRetriever:
         explicit = bm25.explicit_chunks(question)
         if explicit:
             return [SearchHit(chunk=chunk, score=1000) for chunk in explicit[:top_k]]
-        candidates = bm25.candidate_chunks(question, broad=True)
+        candidates = bm25.candidate_chunks(question)
         if not candidates:
             return []
         uploaded_ids = {chunk.id for chunk in uploaded}
@@ -79,9 +79,7 @@ class UnifiedRetriever:
             if extra:
                 hits.extend(
                     self.knowledge._rank_vectors(
-                        question,
                         extra,
-                        {chunk.document_id for chunk in extra},
                         limit=limit,
                         query_vector=vector,
                     )

@@ -1,11 +1,10 @@
-"""从已保存并登记的官方来源快照重建法规文档和按条索引；不联网。"""
+"""从已保存并登记的官方来源快照重建按条法规知识库；不联网。"""
 
 import argparse
 import hashlib
 import json
 import re
 from html.parser import HTMLParser
-from pathlib import Path
 
 from transport_law.config import PROJECT_ROOT
 from transport_law.schemas import LegalChunk
@@ -126,63 +125,6 @@ def read_articles(spec: dict) -> list[dict]:
     return articles
 
 
-def render_document(spec: dict, articles: list[dict]) -> str:
-    is_pdf = spec["snapshot_format"] == "pdf_extract"
-    lines = [
-        f"# {spec['title']}",
-        "",
-        f"- 收录版本：{spec['version_label']}",
-        f"- 效力层级：{spec['legal_level']}；制定机关：{spec['publisher']}",
-        f"- 适用范围：{spec['scope']}",
-        f"- 官方来源：[{spec['source_host']}]({spec['official_url']})",
-        f"- 版本施行日期：{spec['effective_on'] or '未单独核验'}；{spec['effective_note']}",
-        f"- 检索整理日期：{spec['retrieved_on']}；条文数量：{spec['article_count']}"
-        + (f"；交通管理表项：{spec['table_item_count']}" if is_pdf else ""),
-        f"- 本地来源快照：[{Path(spec['file']).name}](../../{spec['file']})",
-        f"- 快照格式：{spec['snapshot_format']}；SHA-256：`{spec['sha256']}`",
-        "",
-        f"> {spec['verification_note']}",
-        (
-            "> 以下仅整理总则及交通管理册；其他管理册只保存在完整原始 PDF 中，未入检索库。"
-            "表格按违法行为保留所有档次，移除单元格排版空白；疑似原文错误不擅自更正。"
-            if is_pdf
-            else "> 以下按条整理来源正文，省略网页导航、目录和章节标题，保留各条各款；"
-            "不是发布机关重新发布的正式文本。引用时以条号定位，不生成虚构页码。"
-        ),
-        "",
-    ]
-    for amendment in spec.get("amendments", []):
-        source = amendment["source"]
-        lines.extend(
-            [
-                f"> 合并依据：[{source['title']}]({source['official_url']})，{source['locator']}。",
-                f"> 修改决定快照：[{Path(source['file']).name}](../../{source['file']})；"
-                f"SHA-256：`{source['sha256']}`。",
-                "",
-            ]
-        )
-    for url in spec.get("version_evidence_urls", []):
-        lines.extend([f"> 版本核对来源：[官方发布或版本说明]({url})。", ""])
-    for article in articles:
-        lines.extend([f"## {article['label']}", ""])
-        if is_pdf:
-            pages = article["pages"]
-            lines.extend(
-                [
-                    f"来源：PDF 物理第 {pages[0]}"
-                    + (f"—{pages[-1]}" if len(pages) > 1 else "")
-                    + f" 页；印刷页码 {pages[0] + 2}"
-                    + (f"—{pages[-1] + 2}" if len(pages) > 1 else "")
-                    + "。",
-                    "",
-                ]
-            )
-        lines.extend([article["text"], ""])
-        if note := spec.get("entry_notes", {}).get(article.get("id_suffix")):
-            lines.extend([f"> 核对提示：{note}", ""])
-    return "\n".join(lines)
-
-
 def make_chunks(spec: dict, articles: list[dict]) -> list[dict]:
     rows = []
     for article in articles:
@@ -280,23 +222,20 @@ def build(check: bool = False) -> dict:
     existing = CORPUS.read_text(encoding="utf-8").splitlines()
     # 原上传资料及其他来源保持原样，不重写其来源或核验状态。
     output = [line for line in existing if json.loads(line)["document_id"] not in managed]
-    artifacts = {}
     total = 0
     table_items = 0
     for spec in manifest["documents"]:
         articles = read_articles(spec)
-        artifacts[PROJECT_ROOT / spec["document_file"]] = render_document(spec, articles)
         output.extend(json.dumps(row, ensure_ascii=False) for row in make_chunks(spec, articles))
         total += spec["article_count"]
         table_items += spec.get("table_item_count", 0)
-    artifacts[CORPUS] = "\n".join(output) + "\n"
-    for path, content in artifacts.items():
-        if check:
-            if not path.exists() or path.read_text(encoding="utf-8") != content:
-                raise ValueError(f"需重建：{path.relative_to(PROJECT_ROOT)}")
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
+    content = "\n".join(output) + "\n"
+    if check:
+        if CORPUS.read_text(encoding="utf-8") != content:
+            raise ValueError(f"需重建：{CORPUS.relative_to(PROJECT_ROOT)}")
+    else:
+        CORPUS.parent.mkdir(parents=True, exist_ok=True)
+        CORPUS.write_text(content, encoding="utf-8")
     return {
         "documents": len(managed),
         "official_articles": total,

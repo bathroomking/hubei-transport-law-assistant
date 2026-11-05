@@ -6,15 +6,15 @@
 
 ## 本轮补充：公安交管与事故现场
 
-| 文件 | 收录版本与层级 | 收录内容 | 本地文档与官方来源 |
+| 文件 | 收录版本与层级 | 收录内容 | 本地来源与官方链接 |
 | --- | --- | --- | --- |
-| 中华人民共和国道路交通安全法 | 2021-04-29 第三次修正；法律 | 全文 124 条 | [本地全文](legal/cn-traffic-safety-2021.md) · [吉林省交通运输厅转载](https://jtyst.jl.gov.cn/zw_133208/zcfg/flfg/202208/t20220824_8549963.html) |
-| 中华人民共和国道路交通安全法实施条例 | 2017-10-07 修订；行政法规 | 全文 115 条 | [本地全文](legal/cn-traffic-implementation-2017.md) · [司法部国家行政法规库](https://xzfg.moj.gov.cn/mobile/law/detail?LawID=1614) |
-| 湖北省实施《中华人民共和国道路交通安全法》办法 | 2013 年官方底本按 2017 年修改决定合并整理；地方性法规 | 全文 82 条；非官方重新公布文本 | [本地整理全文](legal/hb-traffic-2017.md) · [省人大底本](https://www.hppc.gov.cn/null/dhwj/1859237376896184322.html) · [2017 年修改决定](https://www.hppc.gov.cn/rdgb/cwhgb/2017ncwhgb/d07h/1859489474904764418.html) |
-| 道路交通事故处理程序规定 | 公安部令第 146 号，2017 年修订，2018-05-01 施行；部门规章 | 全文 114 条 | [本地全文](legal/cn-accident-procedure-2017.md) · [司法部](https://www.moj.gov.cn/pub/sfbgw/flfggz/flfggzbmgz/201709/t20170919_146045.html) |
-| 道路交通安全违法行为处理程序规定 | 公安部令第 157 号，2020 年修正，2020-05-01 施行；部门规章 | 重新发布全文 83 条 | [本地全文](legal/cn-violation-procedure-2020.md) · [司法部修改决定及重新发布全文](https://www.moj.gov.cn/pub/sfbgw/flfggz/flfggzbmgz/202101/t20210105_146496.html) |
-| 道路交通安全违法行为记分管理办法 | 公安部令第 163 号，2021 年公布，2022-04-01 施行；部门规章 | 全文 37 条 | [本地全文](legal/cn-traffic-points-2021.md) · [司法部](https://www.moj.gov.cn/pub/sfbgw/flfggz/flfggzbmgz/202305/t20230512_478642.html) |
-| 湖北省公安机关行政处罚裁量基准 | 鄂公安规〔2026〕1号；行政规范性文件 | 总则 22 条、交通管理册 29 项入库；完整 PDF 归档 | [本地整理文档](legal/hb-police-discretion-2026.md) · [省公安厅发布通知](https://gat.hubei.gov.cn/zfxxgk/zc/gfxwj/202602/t20260226_5880947.shtml) · [原始 PDF](../data/raw/laws/hb-police-discretion-2026.pdf) |
+| 中华人民共和国道路交通安全法 | 2021-04-29 第三次修正；法律 | 全文 124 条 | [本地来源](../data/raw/laws/cn-traffic-safety-2021.html) · [吉林省交通运输厅转载](https://jtyst.jl.gov.cn/zw_133208/zcfg/flfg/202208/t20220824_8549963.html) |
+| 中华人民共和国道路交通安全法实施条例 | 2017-10-07 修订；行政法规 | 全文 115 条 | [本地来源](../data/raw/laws/cn-traffic-implementation-2017.html) · [司法部国家行政法规库](https://xzfg.moj.gov.cn/mobile/law/detail?LawID=1614) |
+| 湖北省实施《中华人民共和国道路交通安全法》办法 | 2013 年官方底本按 2017 年修改决定合并整理；地方性法规 | 全文 82 条；非官方重新公布文本 | [本地 2013 年底本](../data/raw/laws/hb-traffic-2013-base.html) · [本地 2017 年修改决定](../data/raw/laws/hb-traffic-2017-amendment.html) · [省人大底本](https://www.hppc.gov.cn/null/dhwj/1859237376896184322.html) · [2017 年修改决定](https://www.hppc.gov.cn/rdgb/cwhgb/2017ncwhgb/d07h/1859489474904764418.html) |
+| 道路交通事故处理程序规定 | 公安部令第 146 号，2017 年修订，2018-05-01 施行；部门规章 | 全文 114 条 | [本地来源](../data/raw/laws/cn-accident-procedure-2017.html) · [司法部](https://www.moj.gov.cn/pub/sfbgw/flfggz/flfggzbmgz/201709/t20170919_146045.html) |
+| 道路交通安全违法行为处理程序规定 | 公安部令第 157 号，2020 年修正，2020-05-01 施行；部门规章 | 重新发布全文 83 条 | [本地来源](../data/raw/laws/cn-violation-procedure-2020.html) · [司法部修改决定及重新发布全文](https://www.moj.gov.cn/pub/sfbgw/flfggz/flfggzbmgz/202101/t20210105_146496.html) |
+| 道路交通安全违法行为记分管理办法 | 公安部令第 163 号，2021 年公布，2022-04-01 施行；部门规章 | 全文 37 条 | [本地来源](../data/raw/laws/cn-traffic-points-2021.html) · [司法部](https://www.moj.gov.cn/pub/sfbgw/flfggz/flfggzbmgz/202305/t20230512_478642.html) |
+| 湖北省公安机关行政处罚裁量基准 | 鄂公安规〔2026〕1号；行政规范性文件 | 总则 22 条、交通管理册 29 项入库；完整 PDF 归档 | [省公安厅发布通知](https://gat.hubei.gov.cn/zfxxgk/zc/gfxwj/202602/t20260226_5880947.shtml) · [原始 PDF](../data/raw/laws/hb-police-discretion-2026.pdf) |
 
 ### 事故现场的资料定位
 
@@ -43,20 +43,20 @@
 
 ## 既有交通运输执法资料
 
-点击“本地全文”可直接阅读按条整理的文档；每份文档开头列有来源网址、版本、施行日期说明和来源快照校验值。
+下表“本地来源”链接到保存的官网网页或正文快照。网页“查看原文”从正式 `legal_chunks.jsonl` 动态读取已整理条文；版本、施行日期说明和快照校验值保存在来源清单及条目中。
 
-| 文件 | 效力层级 | 收录版本 | 条数 | 文档与来源 |
+| 文件 | 效力层级 | 收录版本 | 条数 | 来源快照与官方链接 |
 | --- | --- | --- | ---: | --- |
-| 中华人民共和国公路法 | 法律 | 2017-11-04 第五次修正 | 87 | [本地全文](legal/cn-highway-2017.md) · [北京市政府](https://www.beijing.gov.cn/zhengce/zhengcefagui/qtwj/202307/t20230721_3204633.html) |
-| 公路安全保护条例 | 行政法规 | 2011 年，国务院令第 593 号 | 77 | [本地全文](legal/cn-highway-protection-2011.md) · [交通运输部](https://xxgk.mot.gov.cn/jigou/fgs/202006/t20200623_3307992.html) |
-| 湖北省公路路政管理条例 | 地方性法规 | 2017-05-24 修订 | 50 | [本地全文](legal/hb-road-2017.md) · [湖北省人大](https://www.hppc.gov.cn/rdgb/cwhgb/2017ncwhgb/d04h/1859489392113397762.html) |
-| 中华人民共和国道路运输条例 | 行政法规 | 2026-01-30 第六次修订 | 82 | [本地全文](legal/cn-transport-2026.md) · [司法部国家行政法规库](https://xzfg.moj.gov.cn/front/law/detail?LawID=1806) |
-| 农村公路条例 | 行政法规 | 2025 年，国务院令第 813 号 | 28 | [本地全文](legal/cn-rural-2025.md) · [司法部国家行政法规库](https://xzfg.moj.gov.cn/front/law/detail?LawID=1775) |
-| 湖北省农村公路条例 | 地方性法规 | 2007-03-29 通过 | 39 | [本地全文](legal/hb-rural-2007.md) · [湖北省人大](https://www.hppc.gov.cn/rdgb/cwhgb/2007ncwhgb/d03h/1859503023953719297.html) |
-| 湖北省水路交通条例 | 地方性法规 | 2026-05-28 修订 | 73 | [本地全文](legal/hb-water-2026.md) · [湖北日报刊载公告及全文](https://epaper.hubeidaily.net/pad/content/202606/03/content_349703.html) |
-| 中华人民共和国行政处罚法 | 法律 | 2021-01-22 修订 | 86 | [本地全文](legal/cn-penalty-2021.md) · [工业和信息化部](https://www.miit.gov.cn/zwgk/zcwj/flfg/art/2022/art_76d37c09bd594d67b80ec2aa6fababcc.html) |
-| 中华人民共和国行政强制法 | 法律 | 2011-06-30 通过 | 71 | [本地全文](legal/cn-coercion-2011.md) · [国家市场监督管理总局](https://www.samr.gov.cn/fgs/zcfg/art/2023/art_3dacc237ebea4f4083529f4b20141266.html) |
-| 交通运输行政执法程序规定 | 部门规章 | 交通运输部令 2021 年第 6 号修正 | 132 | [本地全文](legal/cn-enforcement-2021.md) · [武汉市交通运输局转载](https://jtj.wuhan.gov.cn/zwgk/zcfg/qtzdgkwj/202107/t20210730_1750639.shtml) |
+| 中华人民共和国公路法 | 法律 | 2017-11-04 第五次修正 | 87 | [本地来源](../data/raw/laws/cn-highway-2017.txt) · [北京市政府](https://www.beijing.gov.cn/zhengce/zhengcefagui/qtwj/202307/t20230721_3204633.html) |
+| 公路安全保护条例 | 行政法规 | 2011 年，国务院令第 593 号 | 77 | [本地来源](../data/raw/laws/cn-highway-protection-2011.html) · [交通运输部](https://xxgk.mot.gov.cn/jigou/fgs/202006/t20200623_3307992.html) |
+| 湖北省公路路政管理条例 | 地方性法规 | 2017-05-24 修订 | 50 | [本地来源](../data/raw/laws/hb-road-2017.html) · [湖北省人大](https://www.hppc.gov.cn/rdgb/cwhgb/2017ncwhgb/d04h/1859489392113397762.html) |
+| 中华人民共和国道路运输条例 | 行政法规 | 2026-01-30 第六次修订 | 82 | [本地来源](../data/raw/laws/cn-transport-2026.html) · [司法部国家行政法规库](https://xzfg.moj.gov.cn/front/law/detail?LawID=1806) |
+| 农村公路条例 | 行政法规 | 2025 年，国务院令第 813 号 | 28 | [本地来源](../data/raw/laws/cn-rural-2025.txt) · [司法部国家行政法规库](https://xzfg.moj.gov.cn/front/law/detail?LawID=1775) |
+| 湖北省农村公路条例 | 地方性法规 | 2007-03-29 通过 | 39 | [本地来源](../data/raw/laws/hb-rural-2007.html) · [湖北省人大](https://www.hppc.gov.cn/rdgb/cwhgb/2007ncwhgb/d03h/1859503023953719297.html) |
+| 湖北省水路交通条例 | 地方性法规 | 2026-05-28 修订 | 73 | [本地来源](../data/raw/laws/hb-water-2026.txt) · [湖北日报刊载公告及全文](https://epaper.hubeidaily.net/pad/content/202606/03/content_349703.html) |
+| 中华人民共和国行政处罚法 | 法律 | 2021-01-22 修订 | 86 | [本地来源](../data/raw/laws/cn-penalty-2021.txt) · [工业和信息化部](https://www.miit.gov.cn/zwgk/zcwj/flfg/art/2022/art_76d37c09bd594d67b80ec2aa6fababcc.html) |
+| 中华人民共和国行政强制法 | 法律 | 2011-06-30 通过 | 71 | [本地来源](../data/raw/laws/cn-coercion-2011.txt) · [国家市场监督管理总局](https://www.samr.gov.cn/fgs/zcfg/art/2023/art_3dacc237ebea4f4083529f4b20141266.html) |
+| 交通运输行政执法程序规定 | 部门规章 | 交通运输部令 2021 年第 6 号修正 | 132 | [本地来源](../data/raw/laws/cn-enforcement-2021.txt) · [武汉市交通运输局转载](https://jtj.wuhan.gov.cn/zwgk/zcfg/qtzdgkwj/202107/t20210730_1750639.shtml) |
 
 国家法律、行政法规在湖北的适用仍须结合事项、管理权限和特别规定判断，不能称为“湖北省制定的法规”。部门规章与裁量基准也不是法律。仅新增法条资料，不提供自动裁量或处罚决定。
 
@@ -88,26 +88,25 @@
 
 | 路径 | 用途 |
 | --- | --- |
-| `docs/legal/` | 17 份可直接阅读的 Markdown 文档（16 份法规规章全文、1 份公安裁量相关部分） |
 | `data/raw/laws/` | 官方 HTML、网页可见文本快照、原始公安裁量 PDF 及按条/表项整理稿 |
 | `data/raw/laws/manifest.json` | 来源、版本、层级、条数、SHA-256、检索主题和效力待核验说明 |
 | `data/processed/legal_chunks.jsonl` | 默认程序读取的 1,336 条知识记录 |
-| `scripts/build_legal_corpus.py` | 离线重建法规文档与索引，检查源文件哈希及条号连续性 |
+| `scripts/build_legal_corpus.py` | 离线重建正式 JSONL，检查源文件哈希及条号连续性 |
 | `evals/official_retrieval.jsonl` | 20 条新增法规检索回归题 |
 | `evals/traffic_police_retrieval.jsonl` | 30 条公安交管条号、场景和表项检索回归题 |
 
-在项目根目录并激活 `.venv` 后：
+在项目根目录并激活 `.venv` 后，可用 `ask` 在线提问，再在返回的引用中查看原文。`ask` 需要配置百炼和 DeepSeek 密钥；下方数据校验及默认 BM25 评测在本地执行：
 
 ```bash
-python -m transport_law retrieve "湖北省公路路政管理条例第12条"
-python -m transport_law retrieve "公路法第44条"
-python -m transport_law retrieve "行政处罚法第33条"
-python -m transport_law retrieve "道路运输条例第9条"
-python -m transport_law retrieve "湖北省水路交通条例第70条"
-python -m transport_law retrieve "车辆变更车道与后车发生剐蹭"
-python -m transport_law retrieve "道路交通事故处理程序规定第60条"
-python -m transport_law retrieve "湖北道交法实施办法第56条"
-python -m transport_law retrieve "湖北公安交管裁量交通管理册第20项"
+python -m transport_law ask "湖北省公路路政管理条例第12条"
+python -m transport_law ask "公路法第44条"
+python -m transport_law ask "行政处罚法第33条"
+python -m transport_law ask "道路运输条例第9条"
+python -m transport_law ask "湖北省水路交通条例第70条"
+python -m transport_law ask "车辆变更车道与后车发生剐蹭"
+python -m transport_law ask "道路交通事故处理程序规定第60条"
+python -m transport_law ask "湖北道交法实施办法第56条"
+python -m transport_law ask "湖北公安交管裁量交通管理册第20项"
 
 python scripts/build_legal_corpus.py --check
 python -m transport_law validate-data
@@ -118,7 +117,7 @@ python -m transport_law evaluate --dataset evals/traffic_police_retrieval.jsonl
 
 本批已进入默认 `LAW_DATA_PATH` 对应文件，不需要重新上传或安装新检索依赖。若 `.env` 自定义了 `LAW_DATA_PATH`，请确认它指向本项目的 `data/processed/legal_chunks.jsonl`。已运行的服务需要重启才能加载新增资料；仅修改 JSONL 不会触发数据热加载。
 
-检索仍是保守的 BM25 和人工主题词入口，建议先用“法规名＋条号”验证；自然语言没有命中不表示相关法律不存在。超速、酒驾等已可查相关基础法条，但这不代表处罚法源链、刑事规则或具体案件条件已齐备。三套开发题集只验证检索，不代表真实问答准确率，本次未请求真实 DeepSeek 生成答案。
+在线问答使用 BM25、向量检索与 RRF 融合，建议先用“法规名＋条号”核对；自然语言没有命中不表示相关法律不存在。超速、酒驾等已可查相关基础法条，但这不代表处罚法源链、刑事规则或具体案件条件已齐备。三套开发题集只验证检索，不代表真实问答准确率，本次未请求真实 DeepSeek 生成答案。
 
 ## 尚未纳入全文的后续资料
 

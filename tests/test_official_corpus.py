@@ -12,7 +12,7 @@ from transport_law.main import create_app
 from transport_law.schemas import Source
 
 
-def test_official_snapshots_and_generated_documents_are_reproducible(repository):
+def test_official_snapshots_and_corpus_are_reproducible(repository):
     build = runpy.run_path(str(PROJECT_ROOT / "scripts/build_legal_corpus.py"))["build"]
     assert build(check=True) == {
         "documents": 17,

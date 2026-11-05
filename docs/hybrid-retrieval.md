@@ -1,6 +1,6 @@
 # 统一在线问答中的 BM25 + 向量 + RRF
 
-产品通过网页、CLI `ask` 和 `POST /api/v1/ask` 提供一条固定在线问答链。`UnifiedRetriever` 联合正式法规和已完成入库的上传资料，不提供独立检索页面、检索 API 或离线问答模式。百炼 `text-embedding-v4` 与 Chroma 保存的文档向量继续复用，无需因入口调整重新分块。
+产品通过网页、CLI `ask` 和 `POST /api/v1/ask` 提供一条固定在线问答链。`hybrid.py` 中的 `HybridRetriever` 联合正式法规和已完成入库的上传资料，不提供独立检索页面、检索 API 或离线问答模式。百炼 `text-embedding-v4` 与 Chroma 保存的文档向量继续复用，无需因入口调整重新分块。
 
 ## 当前查询如何执行
 
@@ -28,6 +28,8 @@ flowchart LR
 两路并行执行，默认各取最多 50 个候选，融合后默认保留 5 条。向量子块回填正式父法条；上传资料按片段 ID 参与排名，不把整份上传文件误当成一个法条。新上传任务变为 `ready` 后，下次请求即可见，无需重启或重算已有文档向量。
 
 ## 排名与边界
+
+所有条目使用相同的 BM25 词项计分与别名匹配规则；没有词项匹配的条目不进入 BM25 排名。法规名称、条号、条目 ID 定位以及全文与重复节选去重仍保留，但不按公路开挖等特定事项固定补入关联条文。向量召回负责补充语义相关候选，两路继续通过 RRF 融合。
 
 BM25 分数与 cosine 相似度量纲不同，RRF 只使用这两路的名次，默认等权：
 
@@ -70,7 +72,7 @@ python -m transport_law evaluate --backend chroma --dataset evals/official_retri
 python -m transport_law evaluate --backend hybrid --dataset evals/traffic_police_retrieval.jsonl
 ```
 
-这些命令分别运行正式法规库的 `BM25Retriever`、`ChromaRetriever` 和 `HybridRetriever`，共用全库候选与法规定位约束。它们不包含 ready 上传快照或 DeepSeek 回答；Chroma 和 hybrid 评测会调用百炼。产品的 `UnifiedRetriever` 则在双库上计算全局排名。
+这些命令分别运行 `BM25Retriever`、`ChromaRetriever` 和 `HybridRetriever`，共用全库候选与法规定位约束。业务问答与 hybrid 评测使用同一个混合检索实现：业务问答传入上传知识库，每次查询合并 ready 快照；维护评测只使用正式法规库。Chroma 和 hybrid 评测会调用百炼，不调用 DeepSeek。
 
 批量对照可复用问题向量：
 

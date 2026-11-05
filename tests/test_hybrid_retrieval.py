@@ -38,19 +38,43 @@ def test_rrf_deduplicates_before_assigning_ranks_and_breaks_ties_by_id(repositor
 
 
 class StubDense:
-    def __init__(self, repository, settings, embedder=None, *, scope=None):
-        self.scope = scope
+    def __init__(self):
+        self.scopes = []
         self.calls = []
 
-    def rank_candidates(self, question, chunks, *, limit):
+    def rank_candidates(self, question, chunks, *, limit, query_vector):
+        assert query_vector == [1.0, 0.0]
         self.calls.append((question, [chunk.id for chunk in chunks], limit))
-        return [SearchHit(chunk=chunk, score=0.5) for chunk in chunks[:limit]]
+        return [
+            SearchHit(chunk=chunk, score=1 / (index + 1))
+            for index, chunk in enumerate(chunks[:limit])
+        ]
+
+
+class QueryEmbeddings:
+    def __init__(self):
+        self.queries = []
+
+    def embed_query(self, question):
+        self.queries.append(question)
+        return [1.0, 0.0]
 
 
 @pytest.fixture
-def hybrid(repository, settings, monkeypatch):
-    monkeypatch.setattr("transport_law.hybrid.ChromaRetriever", StubDense)
-    return HybridRetriever(repository, settings)
+def dense(monkeypatch):
+    dense = StubDense()
+
+    def open_index(repository, settings, embedder, *, scope):
+        dense.scopes.append(scope)
+        return dense
+
+    monkeypatch.setattr("transport_law.hybrid.ChromaRetriever", open_index)
+    return dense
+
+
+@pytest.fixture
+def hybrid(repository, settings, dense):
+    return HybridRetriever(repository, settings, QueryEmbeddings())
 
 
 @pytest.mark.parametrize(
@@ -60,22 +84,28 @@ def hybrid(repository, settings, monkeypatch):
         "湖北公安交管裁量交通管理册第99项",
     ],
 )
-def test_nonexistent_articles_never_call_embedding(hybrid, question):
+def test_nonexistent_articles_never_call_embedding(hybrid, dense, question):
     assert hybrid.search(question) == []
-    assert hybrid.dense.calls == []
+    assert dense.calls == []
+    assert hybrid.embedder.queries == []
+    assert dense.scopes == []
 
 
 @pytest.mark.parametrize("question", ["喝了点酒开车会怎么样？", "个人所得税如何计算？"])
-def test_unrestricted_questions_reach_both_rankers(hybrid, question):
+def test_unrestricted_questions_reach_both_rankers(hybrid, dense, question):
     assert hybrid.search(question)
-    assert hybrid.dense.calls[0][1] == [chunk.id for chunk in hybrid.bm25.chunks]
+    assert dense.calls[0][1] == [chunk.id for chunk in hybrid.bm25.chunks]
+    assert dense.scopes == [hybrid.bm25]
+    assert hybrid.embedder.queries == [question]
 
 
-def test_explicit_excerpt_id_remains_available_without_embedding(hybrid):
+def test_explicit_excerpt_id_remains_available_without_embedding(hybrid, dense):
     hits = hybrid.search("HB-ROAD-003-REG62", top_k=1)
     assert [hit.chunk.id for hit in hits] == ["HB-ROAD-003-REG62"]
     assert hits[0].retrieval is None  # ID 直接定位，不冒充 RRF 结果。
-    assert hybrid.dense.calls == []
+    assert dense.calls == []
+    assert hybrid.embedder.queries == []
+    assert dense.scopes == []
 
 
 @pytest.mark.parametrize(
@@ -87,51 +117,56 @@ def test_explicit_excerpt_id_remains_available_without_embedding(hybrid):
         ("湖北公安交管裁量交通管理册第20项", "hb-police-discretion-2026-T020"),
     ],
 )
-def test_both_channels_respect_law_article_disambiguation(hybrid, question, expected):
+def test_both_channels_respect_law_article_disambiguation(hybrid, dense, question, expected):
     assert [hit.chunk.id for hit in hybrid.search(question)] == [expected]
-    assert hybrid.dense.calls[0][1] == [expected]
+    assert dense.calls[0][1] == [expected]
 
 
-def test_parallel_channels_share_scope_and_fuse_before_final_top_k(hybrid, monkeypatch):
+def test_parallel_channels_share_scope_and_fuse_before_final_top_k(hybrid, dense, monkeypatch):
     barrier = threading.Barrier(2)
     calls = {}
     candidates = hybrid.bm25.candidate_chunks("道路交通安全法")
     assert len(candidates) > 50
 
     def channel(name, ordering):
-        def rank(question, chunks, *, limit):
+        def rank(question, chunks, *, limit, query_vector=None):
             calls[name] = ([c.id for c in chunks], limit)
             barrier.wait(timeout=5)  # 如果两路改为串行，这里会失败。
-            return [SearchHit(chunk=c, score=0.5) for c in ordering[:limit]]
+            return [
+                SearchHit(chunk=c, score=1 / (index + 1))
+                for index, c in enumerate(ordering[:limit])
+            ]
 
         return rank
 
     # 首位法条仅在一路出现；第 20 位法条在两路出现，应经融合排到前面。
     sparse = candidates[:50]
-    dense = [candidates[50], candidates[19]]
+    dense_order = [candidates[50], candidates[19]]
     monkeypatch.setattr(hybrid.bm25, "rank_candidates", channel("bm25", sparse))
-    monkeypatch.setattr(hybrid.dense, "rank_candidates", channel("dense", dense))
+    monkeypatch.setattr(dense, "rank_candidates", channel("dense", dense_order))
     hit = hybrid.search("道路交通安全法", top_k=1)[0]
     assert hit.chunk.id == candidates[19].id
     assert hit.retrieval.bm25_rank == 20 and hit.retrieval.dense_rank == 2
     assert calls["bm25"] == calls["dense"] == ([c.id for c in candidates], 50)
 
 
-def test_vector_failure_is_not_silently_reported_as_successful_fusion(hybrid, monkeypatch):
+def test_vector_failure_is_not_silently_reported_as_successful_fusion(hybrid, dense, monkeypatch):
     def fail(*args, **kwargs):
         raise AppError("embedding_timeout", "模拟超时。", 503)
 
-    monkeypatch.setattr(hybrid.dense, "rank_candidates", fail)
+    monkeypatch.setattr(dense, "rank_candidates", fail)
     with pytest.raises(AppError) as error:
         hybrid.search("公路挖沟")
     assert error.value.code == "embedding_timeout"
 
 
 @pytest.mark.parametrize("top_k", [0, 11])
-def test_hybrid_rejects_invalid_limit_before_query(hybrid, top_k):
+def test_hybrid_rejects_invalid_limit_before_query(hybrid, dense, top_k):
     with pytest.raises(ValueError):
         hybrid.search("公路挖沟", top_k)
-    assert not hybrid.dense.calls
+    assert not dense.calls
+    assert not hybrid.embedder.queries
+    assert not dense.scopes
 
 
 @pytest.mark.parametrize(

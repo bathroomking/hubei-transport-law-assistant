@@ -123,13 +123,12 @@ class BM25Retriever:
                     * 2.5
                     / (frequency + 1.5 * (0.25 + 0.75 * length / self.average_length))
                 )
-            # 整部法规不等于一个执法事项，不能用无词项匹配的任意条文填满 top_k。
-            if score == 0 and chunk.item_id != "road_occupation_excavation":
+            # 所有事项采用相同的词项匹配规则，不用零匹配条文填满召回窗口。
+            if score == 0:
                 continue
             # 完整条号/条目别名匹配优先，避免“第44条”被含同一法律名称的其他条文挤掉。
             alias_bonus = (
                 20 if any(normalize(alias) in normalized_question for alias in chunk.aliases) else 0
             )
-            # 没有匹配口语词的同事项记录仍作为关联依据保留。
-            hits.append(SearchHit(chunk=chunk, score=round(score + alias_bonus + 1, 6)))
+            hits.append(SearchHit(chunk=chunk, score=round(score + alias_bonus, 6)))
         return sorted(hits, key=lambda hit: (-hit.score, hit.chunk.id))[:limit]

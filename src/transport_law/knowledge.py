@@ -7,6 +7,7 @@ import os
 import sqlite3
 import unicodedata
 import uuid
+from collections import Counter
 from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import replace
@@ -447,28 +448,6 @@ class KnowledgeStore:
             if len(collection.get(where={"document_id": ident}, include=[])["ids"]) != len(chunks):
                 raise AppError("vector_index_incomplete", "文档向量数量不完整，请重试。", 503)
 
-    def _ready(self) -> list[dict]:
-        if not self.database.exists():
-            return []
-        with self._connect() as connection:
-            return [
-                dict(row)
-                for row in connection.execute(
-                    "SELECT id, chunk_count FROM documents WHERE status = 'ready'"
-                ).fetchall()
-            ]
-
-    @property
-    def searchable(self) -> list[LegalChunk]:
-        if not self.database.exists():
-            return []
-        with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT c.chunk_json FROM chunks c JOIN documents d ON d.id = c.document_id "
-                "WHERE d.status = 'ready' ORDER BY c.id"
-            ).fetchall()
-        return [LegalChunk.model_validate_json(row["chunk_json"]) for row in rows]
-
     def get_article(self, chunk_id: str) -> LegalChunk:
         if self.database.exists():
             with self._connect() as connection:
@@ -482,15 +461,22 @@ class KnowledgeStore:
         raise AppError("article_not_found", "未找到已完成入库的上传片段。", 404)
 
     def ready_chunks(self) -> list[LegalChunk]:
-        """每次请求固定 ready 快照；刚完成的文档从下一次请求起可见。"""
-        ready = self._ready()
-        if not ready:
+        """一次读取已完成文档及分块，保证查询使用同一个数据库快照。"""
+        if not self.database.exists():
             return []
-        document_ids = {row["id"] for row in ready}
-        # 固定本次查询的 ready 快照；下一次请求即能看到刚完成的新文档。
-        chunks = [chunk for chunk in self.searchable if chunk.document_id in document_ids]
-        count = sum(row["chunk_count"] for row in ready)
-        if len(chunks) != count:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT d.id, d.chunk_count, c.chunk_json FROM documents d "
+                "LEFT JOIN chunks c ON c.document_id = d.id "
+                "WHERE d.status = 'ready' ORDER BY c.id"
+            ).fetchall()
+        chunks = [
+            LegalChunk.model_validate_json(row["chunk_json"])
+            for row in rows
+            if row["chunk_json"] is not None
+        ]
+        expected = Counter({row["id"]: row["chunk_count"] for row in rows})
+        if Counter(chunk.document_id for chunk in chunks) != expected:
             raise AppError("vector_index_incomplete", "上传资料正文缺失，请检查本地索引。", 503)
         return chunks
 

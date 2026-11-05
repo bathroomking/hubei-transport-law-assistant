@@ -1,14 +1,18 @@
-"""在相同法规范围内并行召回 BM25 与 dense，再以父法条 ID 做 RRF。"""
+"""正式法规及可选上传资料共享 BM25、向量排名和 RRF 融合。"""
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING
 
 from transport_law.config import Settings
-from transport_law.embeddings import Embeddings
+from transport_law.embeddings import DashScopeEmbeddings, Embeddings
 from transport_law.repository import LawRepository
 from transport_law.retrieval import BM25Retriever
 from transport_law.schemas import HybridScore, SearchHit
 from transport_law.vector_store import ChromaRetriever
+
+if TYPE_CHECKING:
+    from transport_law.knowledge import KnowledgeStore
 
 
 def reciprocal_rank_fusion(
@@ -59,25 +63,65 @@ def fuse_rankers(
 
 class HybridRetriever:
     def __init__(
-        self, repository: LawRepository, settings: Settings, embedder: Embeddings | None = None
+        self,
+        repository: LawRepository,
+        settings: Settings,
+        embedder: Embeddings | None = None,
+        *,
+        knowledge: "KnowledgeStore | None" = None,
     ):
+        self.repository = repository
+        self.settings = settings
+        self.embedder = embedder or DashScopeEmbeddings(settings)
+        self.knowledge = knowledge
         self.bm25 = BM25Retriever(repository)
-        self.dense = ChromaRetriever(repository, settings, embedder, scope=self.bm25)
-        self.candidate_k = settings.hybrid_candidate_k
-        self.rrf_k = settings.hybrid_rrf_k
+        self._snapshot = ([], self.bm25)
 
     def search(self, question: str, top_k: int = 5) -> list[SearchHit]:
         if not 1 <= top_k <= 10:
             raise ValueError("top_k 必须在 1 到 10 之间")
-        explicit = self.bm25.explicit_chunks(question)
+        # 每次请求读取 ready 快照；只有上传内容变化时重建联合词频统计。
+        uploaded = self.knowledge.ready_chunks() if self.knowledge is not None else []
+        previous, bm25 = self._snapshot
+        if uploaded != previous:
+            bm25 = (
+                BM25Retriever(LawRepository(self.repository.searchable + uploaded))
+                if uploaded
+                else self.bm25
+            )
+            self._snapshot = (uploaded, bm25)
+        explicit = bm25.explicit_chunks(question)
         if explicit:
             return [SearchHit(chunk=chunk, score=1000) for chunk in explicit[:top_k]]
-        candidates = self.bm25.candidate_chunks(question)
+        candidates = bm25.candidate_chunks(question)
         if not candidates:
             return []
+        uploaded_ids = {chunk.id for chunk in uploaded}
+        formal = [chunk for chunk in candidates if chunk.id not in uploaded_ids]
+        extra = [chunk for chunk in candidates if chunk.id in uploaded_ids]
+        limit = self.settings.hybrid_candidate_k
+
+        def dense():
+            # 在请求问题向量前检查正式索引；缺索引不影响页面启动或精确 ID 读取。
+            retriever = (
+                ChromaRetriever(self.repository, self.settings, self.embedder, scope=bm25)
+                if formal
+                else None
+            )
+            vector = self.embedder.embed_query(question)
+            hits = []
+            if retriever is not None:
+                hits.extend(
+                    retriever.rank_candidates(question, formal, limit=limit, query_vector=vector)
+                )
+            if extra:
+                hits.extend(self.knowledge._rank_vectors(extra, limit=limit, query_vector=vector))
+            # 两座库共用一次 embedding；相同 cosine 度量合并成全局 dense 排名。
+            return sorted(hits, key=lambda hit: (-hit.score, hit.chunk.id))[:limit]
+
         return fuse_rankers(
-            lambda: self.bm25.rank_candidates(question, candidates, limit=self.candidate_k),
-            lambda: self.dense.rank_candidates(question, candidates, limit=self.candidate_k),
+            lambda: bm25.rank_candidates(question, candidates, limit=limit),
+            dense,
             top_k=top_k,
-            rrf_k=self.rrf_k,
+            rrf_k=self.settings.hybrid_rrf_k,
         )

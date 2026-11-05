@@ -334,3 +334,16 @@ def test_cli_preflight_works_without_key_or_chroma_runtime(vector_fixture, monke
     assert not settings.chroma_path.exists()
     assert run(parser().parse_args(["validate-data"])) == 0
     assert json.loads(capsys.readouterr().out)["status"] == "ok"
+
+
+def test_hybrid_keeps_dense_matches_when_bm25_has_no_keyword_match(vector_fixture):
+    settings, repository, path = vector_fixture
+    embedder = FakeEmbeddings()
+    build_vector_index(settings, repository, path, embedder=embedder)
+    embedded_batches = len(embedder.documents)
+    hits = HybridRetriever(repository, settings, embedder).search("zxqjv987654", top_k=2)
+    assert [hit.chunk.id for hit in hits] == ["test-A001", "test-A002"]
+    assert all(hit.retrieval.bm25_rank is None for hit in hits)
+    assert [hit.retrieval.dense_rank for hit in hits] == [1, 2]
+    assert embedder.queries == ["zxqjv987654"]
+    assert len(embedder.documents) == embedded_batches

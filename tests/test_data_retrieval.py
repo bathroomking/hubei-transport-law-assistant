@@ -31,12 +31,13 @@ from transport_law.schemas import SearchRequest
                 "outside-land",
             },
         ),
-        ("official_retrieval", 20, {"outside-crime", "outside-weather", "outside-land"}),
+        ("official_retrieval", 20, {"outside-weather", "outside-land"}),
         ("traffic_police_retrieval", 30, {"out-of-scope-weather", "out-of-scope-tax"}),
     ],
 )
 def test_full_corpus_bm25_regressions(retriever, dataset, total, known_gaps):
-    # 清理前在线 broad=True 路径已有这些缺口；不修改题目/期望来伪造全通过。
+    # 保留全库召回已知缺口；移除公路特判后，outside-crime 已正确空召回。
+    # 不修改题目/期望来伪造全通过，也不允许新增失败。
     # 自然语言范围外题的最终拒答由问答模型负责，不能再依赖旧事项白名单。
     report = evaluate_retrieval(PROJECT_ROOT / f"evals/{dataset}.jsonl", retriever)
     assert report["total"] == total
@@ -51,6 +52,57 @@ def test_full_corpus_bm25_regressions(retriever, dataset, total, known_gaps):
 @pytest.mark.parametrize("question", ["喝了点酒开车会怎么样？", "武汉明天天气怎样？"])
 def test_candidates_do_not_require_item_aliases(retriever, question):
     assert retriever.candidate_chunks(question) == retriever.chunks
+
+
+@pytest.mark.parametrize("question", ["zxqjv987654", "qpmznv246810"])
+def test_no_keyword_match_returns_no_sparse_hits(retriever, question):
+    assert retriever.search(question) == []
+
+
+@pytest.fixture
+def keyword_repository(repository):
+    template = repository.searchable[0]
+    return LawRepository(
+        [
+            template.model_copy(
+                update={
+                    "id": ident,
+                    "document_id": "sample",
+                    "item_id": "ordinary_item",
+                    "text": text,
+                    "search_text": text,
+                    "aliases": aliases,
+                    "document_aliases": [],
+                    "related_excerpt_ids": [],
+                }
+            )
+            for ident, text, aliases in [
+                ("sample-plain", "alpha", []),
+                ("sample-boosted", "alpha", ["alpha"]),
+                ("sample-unrelated", "omega", []),
+            ]
+        ]
+    )
+
+
+@pytest.mark.parametrize("item_id", ["road_occupation_excavation", "another_item"])
+def test_item_classification_does_not_change_keyword_ranking(keyword_repository, item_id):
+    changed = LawRepository(
+        [chunk.model_copy(update={"item_id": item_id}) for chunk in keyword_repository.searchable]
+    )
+    expected = BM25Retriever(keyword_repository).search("alpha")
+    actual = BM25Retriever(changed).search("alpha")
+    assert [(hit.chunk.id, hit.score) for hit in actual] == [
+        (hit.chunk.id, hit.score) for hit in expected
+    ]
+
+
+def test_generic_alias_bonus_keeps_keyword_scores_and_excludes_unrelated_text(keyword_repository):
+    hits = BM25Retriever(keyword_repository).search("alpha")
+    assert [hit.chunk.id for hit in hits] == ["sample-boosted", "sample-plain"]
+    assert hits[0].score - hits[1].score == pytest.approx(20)
+    # 简单词项的原始 BM25 分数小于 1，不再附加与匹配无关的固定分数。
+    assert 0 < hits[1].score < 1
 
 
 def test_tokenization_preserves_english_word_boundaries_and_chinese_layout():

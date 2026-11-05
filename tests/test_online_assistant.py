@@ -9,10 +9,10 @@ from test_vector_store import FakeEmbeddings
 from test_vector_store import vector_fixture as vector_fixture
 
 from transport_law.errors import AppError
+from transport_law.hybrid import HybridRetriever
 from transport_law.knowledge import KnowledgeStore
 from transport_law.llm import Completion
 from transport_law.main import create_app
-from transport_law.online import UnifiedRetriever
 from transport_law.retrieval import BM25Retriever
 from transport_law.vector_store import build_vector_index
 
@@ -42,7 +42,7 @@ def online_setup(vector_fixture, monkeypatch):
         }
     )
     embedder = FakeEmbeddings()
-    monkeypatch.setattr("transport_law.online.DashScopeEmbeddings", lambda settings: embedder)
+    monkeypatch.setattr("transport_law.hybrid.DashScopeEmbeddings", lambda settings: embedder)
     monkeypatch.setattr("transport_law.knowledge.DashScopeEmbeddings", lambda settings: embedder)
     return settings, repository, documents, embedder
 
@@ -79,20 +79,28 @@ class EvidenceLLM:
 
 
 def test_unified_ask_merges_both_libraries_and_publishes_ready_sources_without_restart(
-    online_index,
+    online_index, monkeypatch
 ):
     settings, repository, embedder = online_index
     question = "那我接下来该咋办呀？"
     assert BM25Retriever(repository).candidate_chunks(question) == repository.searchable
+    sparse_builds = []
+
+    def build_sparse(repository):
+        sparse_builds.append(len(repository.searchable))
+        return BM25Retriever(repository)
+
+    monkeypatch.setattr("transport_law.hybrid.BM25Retriever", build_sparse)
     llm = EvidenceLLM()
     with TestClient(create_app(settings, llm)) as client:
         runtime = client.app.state.runtime
-        assert isinstance(runtime.service.retriever, UnifiedRetriever)
+        assert isinstance(runtime.service.retriever, HybridRetriever)
         assert runtime.repository.knowledge is runtime.knowledge
         first = client.post("/api/v1/ask", json={"question": question, "top_k": 3})
         assert first.status_code == 200, first.text
         assert len(first.json()["source_documents"]) == 2
         assert embedder.queries == [question]
+        assert sparse_builds == [2]
 
         upload = client.post(
             "/api/v1/knowledge/documents",
@@ -114,6 +122,7 @@ def test_unified_ask_merges_both_libraries_and_publishes_ready_sources_without_r
         assert uploaded_hit.retrieval.dense_rank == 2
         assert all(hit.retrieval.method == "rrf" for hit in hits)
         assert embedder.queries == [question, question]
+        assert sparse_builds == [2, 3]
 
         second = client.post("/api/v1/ask", json={"question": question, "top_k": 3})
         assert second.status_code == 200, second.text
@@ -130,6 +139,7 @@ def test_unified_ask_merges_both_libraries_and_publishes_ready_sources_without_r
         # 一次查询只有一个问题向量，两座 collection 不重复请求，也不重建文档向量。
         assert embedder.queries == [question, question, question]
         assert len(embedder.documents) == embedded_batches
+        assert sparse_builds == [2, 3]  # ready 快照未变，不重复构建联合词频统计。
 
         for source in answer["sources"]:
             article = client.get(f"/api/v1/articles/{source['id']}")
@@ -158,7 +168,7 @@ def test_sparse_and_dense_ranks_are_global_across_libraries(online_index):
     uploaded_id = knowledge.receive("说明.txt", BytesIO("占用公路需许可。".encode()))["id"]
     knowledge.process(uploaded_id)
     assert knowledge.get_document(uploaded_id)["status"] == "ready"
-    retriever = UnifiedRetriever(repository, knowledge, settings, embedder)
+    retriever = HybridRetriever(repository, settings, embedder, knowledge=knowledge)
     hits = retriever.search("占用公路需许可", top_k=3)
     assert {hit.chunk.document_id for hit in hits} == {"test-road", uploaded_id}
     # 正式库和上传库共同竞争排名，两边各自第一名不能都标成同一路 rank=1。
@@ -174,7 +184,7 @@ def test_sparse_and_dense_ranks_are_global_across_libraries(online_index):
 def test_everyday_language_reaches_dense_retrieval_without_aliases(online_index, question):
     settings, repository, embedder = online_index
     assert BM25Retriever(repository).candidate_chunks(question) == repository.searchable
-    retriever = UnifiedRetriever(repository, KnowledgeStore(settings), settings, embedder)
+    retriever = HybridRetriever(repository, settings, embedder, knowledge=KnowledgeStore(settings))
     hits = retriever.search(question)
     assert {hit.chunk.id for hit in hits} == {chunk.id for chunk in repository.searchable}
     assert all(hit.retrieval.dense_rank for hit in hits)
@@ -183,7 +193,7 @@ def test_everyday_language_reaches_dense_retrieval_without_aliases(online_index,
 
 def test_explicit_missing_article_does_not_broaden_or_call_embedding(online_setup):
     settings, repository, _, embedder = online_setup
-    retriever = UnifiedRetriever(repository, KnowledgeStore(settings), settings, embedder)
+    retriever = HybridRetriever(repository, settings, embedder, knowledge=KnowledgeStore(settings))
     assert retriever.search("测试公路法第999条") == []
     assert embedder.queries == []
     assert not settings.chroma_path.exists()

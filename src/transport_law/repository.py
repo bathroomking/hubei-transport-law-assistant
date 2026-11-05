@@ -1,10 +1,14 @@
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
 from transport_law.errors import AppError
 from transport_law.schemas import LegalChunk
+
+if TYPE_CHECKING:
+    from transport_law.knowledge import KnowledgeStore
 
 
 class LawRepository:
@@ -54,3 +58,25 @@ class LawRepository:
         if chunk_id not in self._by_id:
             raise AppError("article_not_found", "未找到指定条目。", 404)
         return self._by_id[chunk_id]
+
+
+class CombinedRepository:
+    def __init__(self, curated: LawRepository, knowledge: "KnowledgeStore"):
+        self.curated = curated
+        self.knowledge = knowledge
+
+    @property
+    def all_chunks(self) -> list[LegalChunk]:
+        return self.curated.all_chunks + self.knowledge.ready_chunks()
+
+    @property
+    def searchable(self) -> list[LegalChunk]:
+        return self.curated.searchable + self.knowledge.ready_chunks()
+
+    def get_article(self, chunk_id: str) -> LegalChunk:
+        try:
+            return self.curated.get_article(chunk_id)
+        except AppError as exc:
+            if exc.code != "article_not_found":
+                raise
+        return self.knowledge.get_article(chunk_id)

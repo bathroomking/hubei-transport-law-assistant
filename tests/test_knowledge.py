@@ -10,9 +10,9 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from transport_law.errors import AppError
+from transport_law.hybrid import HybridRetriever
 from transport_law.llm import Completion
 from transport_law.main import create_app
-from transport_law.online import UnifiedRetriever
 from transport_law.repository import LawRepository
 
 pytest.importorskip("chromadb")
@@ -23,7 +23,7 @@ BASE = "/api/v1/knowledge"
 
 def uploaded_retriever(client):
     store = client.app.state.runtime.knowledge
-    return UnifiedRetriever(LawRepository([]), store, store.settings, store.embedder)
+    return HybridRetriever(LawRepository([]), store.settings, store.embedder, knowledge=store)
 
 
 def uploaded_hits(client, question, top_k=5):
@@ -467,3 +467,34 @@ def test_unknown_upload_and_chunk_return_404(upload_setup):
         assert client.get(f"{BASE}/documents/unknown").status_code == 404
         assert client.post(f"{BASE}/documents/unknown/retry").status_code == 404
         assert client.get("/api/v1/articles/unknown").status_code == 404
+
+
+@pytest.mark.parametrize("corruption", ["missing_document_chunks", "shifted_counts"])
+def test_ready_snapshot_checks_each_document_without_reprocessing(upload_setup, corruption):
+    from transport_law.knowledge import KnowledgeStore
+
+    settings, embedder = upload_setup
+    store = KnowledgeStore(settings)
+    identifiers = []
+    for name in ("one.txt", "two.txt"):
+        ident = store.receive(name, BytesIO(b"Stored document text."))["id"]
+        store.process(ident)
+        assert store.get_document(ident)["status"] == "ready"
+        identifiers.append(ident)
+    assert len(store.ready_chunks()) == 2
+    before = len(embedder.calls)
+    with store._connect() as connection:
+        if corruption == "missing_document_chunks":
+            connection.execute("DELETE FROM chunks WHERE document_id = ?", (identifiers[0],))
+        else:
+            # 总数相同也不能掩盖某份文档丢失/多出正文。
+            connection.execute(
+                "UPDATE documents SET chunk_count = 0 WHERE id = ?", (identifiers[0],)
+            )
+            connection.execute(
+                "UPDATE documents SET chunk_count = 2 WHERE id = ?", (identifiers[1],)
+            )
+    with pytest.raises(AppError) as error:
+        store.ready_chunks()
+    assert error.value.code == "vector_index_incomplete"
+    assert len(embedder.calls) == before and not embedder.queries

@@ -2,7 +2,7 @@
 
 用自己的话描述交通法规问题，在线获得带出处的解释、需要补充的信息，并查看引用条文和已收录法规原文。法规查找、带依据问答和裁量参考共用一个入口，不需要先选择功能或填写案件事实表单。
 
-业务问答固定使用 **BM25 + 阿里云百炼向量检索 + RRF 融合 + DeepSeek**。正式法规与已完成入库的上传资料共同参与检索；BM25 保留为混合检索的一部分及维护评测基线，不提供独立的离线问答或离线检索入口。资料目录见 [湖北交通法律法规资料库](docs/legal-sources.md)。
+业务问答固定使用 **BM25 + 阿里云百炼向量检索 + RRF 融合 + DeepSeek**。正式法规与已完成入库的上传资料共同参与检索；BM25 与向量检索共用通用的法规名称、条号和 ID 定位，不再为某个事项补入固定关联条文。算法比较供维护使用，不提供独立的离线问答或离线检索入口。资料目录见 [湖北交通法律法规资料库](docs/legal-sources.md)。
 
 当前技术栈为 Python 3.11+、FastAPI、HTTPX、LangChain Core / Text Splitters、JSONL 和 ChromaDB。前端使用原生 HTML / CSS / JavaScript，由同一个 Python 服务提供。
 
@@ -134,12 +134,11 @@ src/transport_law/
   config.py        配置与路径
   schemas.py       条目、来源和问答的数据结构
   documents.py     文档模型、按版本读取与收录覆盖校验
-  repository.py    正式条目校验与原文读取
+  repository.py    正式条目校验、双库资料读取与原文回查
   retrieval.py     BM25、法规名称与条号约束
   embeddings.py    百炼向量接口、校验与重试
   vector_store.py  Chroma 持久化、续传与父法条回填
-  hybrid.py        RRF 融合与正式法规库算法评测检索器
-  online.py        双库资料读取与全局 BM25/dense 排名
+  hybrid.py        统一混合检索：全局 BM25 / 向量排名与 RRF 融合
   knowledge.py     上传登记、后台分块入库与上传资料检索
   llm.py           DeepSeek 请求、超时和错误处理
   prompts.py       提示词与原文消息构建

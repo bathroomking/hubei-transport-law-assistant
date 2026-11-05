@@ -49,7 +49,7 @@ ba2ef1a318f5bca73a228de21d70ff884387a1a3f233a87402c56e506fecce57
 | `id` | 条目唯一标识，只用 ASCII 字母、数字、下划线、点、冒号和连字符 |
 | `document_id` | 文档身份，版本变更时保持稳定 |
 | `version_id` | 当前材料版本，不以未知生效日期命名 |
-| `item_id` | 事项身份，关联该事项的认定、处罚和裁量依据 |
+| `item_id` | 条目所属事项的资料标签，不触发固定关联召回 |
 | `kind` | recognition / penalty / discretion / provision（法规正文）/ procedure（通则及程序依据） |
 | `source.source_type` | pdf / web，旧记录默认为 pdf |
 | `source.pdf_page` | PDF 物理页码，从 1 开始；网页必须为 null |

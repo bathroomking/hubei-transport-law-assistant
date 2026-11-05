@@ -19,12 +19,18 @@ class Runtime:
 def build_runtime(settings: Settings | None = None, llm: LanguageModel | None = None) -> Runtime:
     settings = settings or Settings()
     repository = LawRepository.from_jsonl(settings.law_data_path)
+    if settings.retrieval_backend == "chroma":
+        from transport_law.vector_store import ChromaRetriever
+
+        retriever = ChromaRetriever(repository, settings)
+    else:
+        retriever = BM25Retriever(repository)
     return Runtime(
         settings=settings,
         repository=repository,
         service=LawService(
             repository,
-            BM25Retriever(repository),
+            retriever,
             llm or DeepSeekClient(settings),
             top_k=settings.retrieval_top_k,
         ),

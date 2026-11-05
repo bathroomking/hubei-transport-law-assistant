@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator
@@ -21,8 +22,26 @@ class Settings(BaseSettings):
     law_data_path: Path = PROJECT_ROOT / "data/processed/legal_chunks.jsonl"
     discretion_data_path: Path = PROJECT_ROOT / "data/rules/road_occupation.json"
     retrieval_top_k: int = Field(default=5, ge=1, le=10)
+    retrieval_backend: Literal["bm25", "chroma"] = "bm25"
+    dashscope_api_key: SecretStr = SecretStr("")
+    dashscope_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
+    embedding_model: Literal["text-embedding-v4"] = "text-embedding-v4"
+    # 百炼 v4 的支持维度；请求时通过 dimension 指定，同时校验返回长度。
+    embedding_dimensions: int = Field(default=2048, ge=64, le=2048)
+    embedding_batch_size: int = Field(default=10, ge=1, le=10)
+    embedding_timeout_seconds: float = Field(default=60, gt=0, le=300)
+    embedding_max_retries: int = Field(default=2, ge=0, le=3)
+    embedding_query_instruction: str = Field(
+        default=(
+            "Given a question about Chinese transportation law, retrieve relevant "
+            "legal provisions that help answer the question."
+        ),
+        min_length=1,
+    )
+    chroma_path: Path = PROJECT_ROOT / "data/local/chroma"
+    chroma_collection: str = Field(default="transport_law_bailian_v4_2048_v1", min_length=3)
 
-    @field_validator("deepseek_base_url")
+    @field_validator("deepseek_base_url", "dashscope_base_url")
     @classmethod
     def validate_url(cls, value: str) -> str:
         value = value.strip().rstrip("/")
@@ -35,10 +54,24 @@ class Settings(BaseSettings):
             or parsed.query
             or parsed.fragment
         ):
-            raise ValueError("DEEPSEEK_BASE_URL 必须是无认证信息、查询参数和片段的 HTTPS 地址")
+            raise ValueError("模型接口地址必须是无认证信息、查询参数和片段的 HTTPS 地址")
         return value
 
-    @field_validator("law_data_path", "discretion_data_path")
+    @field_validator("dashscope_base_url")
+    @classmethod
+    def validate_dashscope_path(cls, value: str) -> str:
+        if urlsplit(value).path != "/api/v1":
+            raise ValueError("DASHSCOPE_BASE_URL 必须使用以 /api/v1 结尾的原生接口地址")
+        return value
+
+    @field_validator("embedding_dimensions")
+    @classmethod
+    def validate_embedding_dimensions(cls, value: int) -> int:
+        if value not in (64, 128, 256, 512, 768, 1024, 1536, 2048):
+            raise ValueError("EMBEDDING_DIMENSIONS 必须是百炼 text-embedding-v4 支持的维度")
+        return value
+
+    @field_validator("law_data_path", "discretion_data_path", "chroma_path")
     @classmethod
     def resolve_path(cls, value: Path) -> Path:
         return value if value.is_absolute() else PROJECT_ROOT / value
@@ -46,3 +79,7 @@ class Settings(BaseSettings):
     @property
     def llm_configured(self) -> bool:
         return bool(self.deepseek_api_key.get_secret_value().strip())
+
+    @property
+    def embedding_configured(self) -> bool:
+        return bool(self.dashscope_api_key.get_secret_value().strip())

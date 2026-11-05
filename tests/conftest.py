@@ -18,6 +18,17 @@ def settings(monkeypatch):
         "LAW_DATA_PATH",
         "DISCRETION_DATA_PATH",
         "RETRIEVAL_TOP_K",
+        "RETRIEVAL_BACKEND",
+        "DASHSCOPE_API_KEY",
+        "DASHSCOPE_BASE_URL",
+        "EMBEDDING_MODEL",
+        "EMBEDDING_DIMENSIONS",
+        "EMBEDDING_BATCH_SIZE",
+        "EMBEDDING_TIMEOUT_SECONDS",
+        "EMBEDDING_MAX_RETRIES",
+        "EMBEDDING_QUERY_INSTRUCTION",
+        "CHROMA_PATH",
+        "CHROMA_COLLECTION",
     ):
         monkeypatch.delenv(key, raising=False)
     return Settings(_env_file=None)

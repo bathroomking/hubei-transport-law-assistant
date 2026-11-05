@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 from pydantic import ValidationError
@@ -27,7 +28,8 @@ class LawService:
         )
 
     async def ask(self, request: SearchRequest) -> AnswerResponse:
-        result = self.retrieve(request)
+        # Chroma 检索包含同步 HTTP 请求，在工作线程执行，避免阻塞 FastAPI 事件循环。
+        result = await asyncio.to_thread(self.retrieve, request)
         if not result.hits:
             return AnswerResponse(
                 status="insufficient_evidence",

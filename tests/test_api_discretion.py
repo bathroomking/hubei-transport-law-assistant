@@ -1,3 +1,4 @@
+import builtins
 from decimal import Decimal
 
 import pytest
@@ -32,6 +33,26 @@ def test_api_smoke_validation_and_missing_key(settings):
         assert client.get("/api/v1/discretion/unknown").status_code == 404
         check = client.post("/api/v1/discretion/check", json={"region": "湖北省"}).json()
         assert check["status"] == "needs_facts"
+
+
+def test_service_restart_and_retrieval_do_not_load_chunking_dependencies(settings, monkeypatch):
+    original_import = builtins.__import__
+
+    def import_without_ingestion(name, *args, **kwargs):
+        if name.startswith(("langchain", "transport_law.chunking", "transport_law.ingest")):
+            pytest.fail("服务启动和检索不应加载文档提取或分块模块")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_ingestion)
+    results = []
+    # 两次完整 lifespan 对应两次启动，直接加载持久化资料即可检索。
+    for _ in range(2):
+        with TestClient(create_app(settings)) as client:
+            assert client.get("/health").json()["status"] == "ok"
+            response = client.post("/api/v1/retrieve", json={"question": "公路法第四十四条"})
+            assert response.status_code == 200
+            results.append(response.json()["hits"])
+    assert results[0] and results[0] == results[1]
 
 
 @pytest.mark.parametrize("area", ["19.9999", "20", "20.0001", "39.9999", "40", "40.0001"])

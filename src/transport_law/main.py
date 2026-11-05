@@ -62,6 +62,10 @@ def create_app(settings: Settings | None = None, llm: LanguageModel | None = Non
             "llm_configured": runtime.settings.llm_configured,
             "llm_model": runtime.settings.deepseek_model,
             "llm_connectivity": "not_checked",
+            "retrieval_backend": runtime.settings.retrieval_backend,
+            "embedding_configured": runtime.settings.embedding_configured,
+            "embedding_model": runtime.settings.embedding_model,
+            "embedding_connectivity": "not_checked",
         }
 
     @app.post("/api/v1/retrieve", response_model=SearchResponse, tags=["法规检索"])

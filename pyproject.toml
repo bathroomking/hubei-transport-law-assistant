@@ -18,6 +18,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff>=0.9,<1"]
 pdf = ["pypdf>=5,<7"]
+ingest = ["pypdf>=5,<7", "langchain-core>=1.0,<2", "langchain-text-splitters>=1.0,<2"]
+vectors = ["chromadb>=1.5,<2"]
 
 [project.scripts]
 transport-law = "transport_law.cli:main"

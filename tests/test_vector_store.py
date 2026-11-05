@@ -265,12 +265,17 @@ def test_changed_corpus_and_changed_chunk_ids_require_new_collection(vector_fixt
     assert error.value.code == "vector_index_mismatch"
 
 
-@pytest.mark.parametrize("backend", ["chroma", "hybrid"])
-def test_api_uses_vectors_and_keeps_citation_validation(vector_fixture, monkeypatch, backend):
+def test_api_uses_vectors_and_keeps_citation_validation(vector_fixture):
     settings, repository, path = vector_fixture
+    settings = settings.model_copy(
+        update={
+            "deepseek_api_key": SecretStr("offline-test-key"),
+            "dashscope_api_key": SecretStr("offline-test-key"),
+        }
+    )
     embedder = FakeEmbeddings()
     build_vector_index(settings, repository, path, embedder=embedder)
-    monkeypatch.setattr("transport_law.vector_store.DashScopeEmbeddings", lambda settings: embedder)
+    retriever = HybridRetriever(repository, settings, embedder)
 
     class FakeLLM:
         citation = "test-A001"
@@ -290,20 +295,18 @@ def test_api_uses_vectors_and_keeps_citation_validation(vector_fixture, monkeypa
             )
 
     llm = FakeLLM()
-    with TestClient(
-        create_app(settings.model_copy(update={"retrieval_backend": backend}), llm)
-    ) as c:
-        assert c.get("/health").json()["retrieval_backend"] == backend
+    with TestClient(create_app(settings, llm, retriever=retriever)) as c:
+        assert c.get("/health").json()["retrieval_backend"] == "hybrid"
+        assert c.get("/health").json()["online_only"] is True
         request = {"question": "公路挖沟有哪些依据？", "top_k": 2}
-        hits = c.post("/api/v1/retrieve", json=request).json()["hits"]
-        assert hits[0]["chunk"]["id"] == "test-A001"
-        if backend == "hybrid":
-            assert hits[0]["retrieval"]["method"] == "rrf"
-            assert hits[0]["retrieval"]["dense_rank"] == 1
-        answer = c.post("/api/v1/ask", json=request).json()
-        assert [row["id"] for row in answer["source_documents"]] == [
-            hit["chunk"]["id"] for hit in hits
-        ]
+        hits = retriever.search(request["question"], request["top_k"])
+        assert hits[0].chunk.id == "test-A001"
+        assert hits[0].retrieval.method == "rrf"
+        assert hits[0].retrieval.dense_rank == 1
+        response = c.post("/api/v1/ask", json=request)
+        assert response.status_code == 200, response.text
+        answer = response.json()
+        assert [row["id"] for row in answer["source_documents"]] == [hit.chunk.id for hit in hits]
         assert answer["sources"][0] == repository.get_article("test-A001").model_dump(mode="json")
         assert answer["applicability_status"] == "not_verified"
         llm.citation = "invented-source"

@@ -3,21 +3,21 @@
 (() => {
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const ITEM_ID = "road_occupation_excavation";
-  const viewNames = { retrieve: "法规检索", ask: "带依据问答", facts: "裁量辅助", status: "服务状态" };
-  const kindNames = { recognition: "认定依据", penalty: "处罚依据", discretion: "裁量基准", provision: "法规条文", procedure: "程序依据" };
-  const verificationNames = { pending: "适用待核验", verified: "来源已核验", superseded: "已被替代" };
-  const fieldNames = {
-    region: "案发省份", location: "具体地点", occurred_on: "发生日期", road_type: "道路类型",
-    behavior: "具体行为", has_permission: "相关许可", area_m2: "占用 / 挖掘面积",
-    facts_verified: "事实核验声明", question: "问题", top_k: "检索条目数",
-  };
+  const form = $("#ask-form");
+  const input = $("#ask-question");
+  const results = $("#ask-results");
   const dialog = $("#detail-dialog");
+  const coverageNames = {
+    full_text: "整部法规",
+    selected_sections: "已收录章节",
+    excerpts: "已收录节选",
+    uploaded_document: "上传文档",
+  };
+  let questionController;
   let dialogController;
   let healthLoading = false;
-  let toastTimer;
 
-  // All API and model text is rendered as text, never as executable HTML.
+  // API responses and model output are always text, never executable markup.
   function el(tag, className, text) {
     const element = document.createElement(tag);
     if (className) element.className = className;
@@ -36,24 +36,14 @@
   }
 
   function button(text, className, callback) {
-    const result = el("button", className, text);
-    result.type = "button";
-    if (callback) result.addEventListener("click", callback);
-    return result;
+    const control = el("button", className, text);
+    control.type = "button";
+    control.addEventListener("click", callback);
+    return control;
   }
 
-  function notice(text, variant = "") {
-    const box = el("div", `notice ${variant}`);
-    box.append(icon("info"), el("p", "", text));
-    return box;
-  }
-
-  function toast(text) {
-    clearTimeout(toastTimer);
-    const box = $("#toast");
-    box.textContent = text;
-    box.hidden = false;
-    toastTimer = setTimeout(() => { box.hidden = true; }, 3600);
+  function notice(text) {
+    return el("p", "notice", text);
   }
 
   async function request(path, { body, signal } = {}) {
@@ -61,8 +51,7 @@
     const forwardAbort = () => controller.abort();
     if (signal?.aborted) controller.abort();
     signal?.addEventListener("abort", forwardAbort, { once: true });
-    const waitMs = path.endsWith("/ask") ? 610000 : path.endsWith("/retrieve") ? 310000 : 20000;
-    const timeout = setTimeout(() => controller.abort(), waitMs);
+    const timeout = setTimeout(() => controller.abort(), body === undefined ? 20000 : 610000);
     try {
       const response = await fetch(path, {
         method: body === undefined ? "GET" : "POST",
@@ -78,23 +67,20 @@
         data = await response.json();
       } catch (error) {
         if (controller.signal.aborted) throw error;
-        throw new Error("服务返回了无法读取的内容，请确认 Python 服务已正常启动。");
+        throw new Error("暂时无法读取服务返回的内容，请稍后重试。");
       }
       if (!response.ok) {
         let message = data.error?.message;
-        if (!message && Array.isArray(data.detail)) {
-          const fields = [...new Set(data.detail.map((entry) => fieldNames[entry.loc?.[1]] || "输入内容"))];
-          message = `请检查${fields.join("、")}的格式或范围。`;
-        }
+        if (!message && Array.isArray(data.detail)) message = "请检查问题长度，输入 2 至 2000 个字符后重试。";
         const error = new Error(message || `请求失败（${response.status}），请稍后重试。`);
         error.code = data.error?.code;
         throw error;
       }
       return data;
     } catch (error) {
-      if (signal?.aborted) throw new DOMException("已取消请求", "AbortError");
-      if (controller.signal.aborted) throw new Error("等待服务响应超时，请稍后重试。");
-      if (error instanceof TypeError) throw new Error("无法连接本地服务，请确认服务正在运行，然后重试。");
+      if (signal?.aborted) throw new DOMException("已取消等待", "AbortError");
+      if (controller.signal.aborted) throw new Error("等待服务响应超时，请稍后重新发送。");
+      if (error instanceof TypeError) throw new Error("暂时无法连接服务，请检查连接后重试。");
       throw error;
     } finally {
       clearTimeout(timeout);
@@ -104,8 +90,10 @@
 
   function renderLoading(target, text, cancel) {
     const box = el("div", "loading-state");
-    box.append(el("span", "spinner"), el("span", "", text));
-    if (cancel) box.append(button("取消", "text-button", cancel));
+    const spinner = el("span", "spinner");
+    spinner.setAttribute("aria-hidden", "true");
+    box.append(spinner, el("span", "", text));
+    if (cancel) box.append(button("取消等待", "text-button", cancel));
     target.replaceChildren(box);
     target.setAttribute("aria-busy", "true");
   }
@@ -113,278 +101,177 @@
   function renderError(target, error, retry) {
     const box = el("div", "error-panel");
     box.setAttribute("role", "alert");
-    box.append(el("h2", "", "暂时无法完成请求"), el("p", "", error.message));
-    if (error.code === "llm_not_configured") {
-      box.append(el("p", "", "请在项目的 .env 中配置 DEEPSEEK_API_KEY 并重启服务，也可以先使用法规检索查看原文。"));
-      const link = el("a", "button secondary", "前往法规检索");
-      link.href = "#retrieve";
-      box.append(link);
-    } else if (retry) {
-      box.append(button("重新尝试", "button secondary", retry));
-    }
+    box.append(el("h2", "", "暂时没有完成"), el("p", "", error.message));
+    if (retry) box.append(button("重新尝试", "button secondary", retry));
     target.replaceChildren(box);
   }
 
-  function emptyState(title, description, iconName = "search") {
-    const box = el("div", "empty-state");
-    const emblem = el("span", "empty-icon");
-    emblem.append(icon(iconName));
-    box.append(emblem, el("h2", "", title), el("p", "", description));
-    return box;
+  function officialLink(urlValue, label = "查看官方出处") {
+    if (!urlValue) return null;
+    try {
+      const url = new URL(urlValue);
+      if (!["https:", "http:"].includes(url.protocol)) return null;
+      const link = el("a", "text-link", label);
+      link.href = url.href;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.append(icon("external"));
+      return link;
+    } catch {
+      return null;
+    }
   }
 
-  function resultHeading(title, detail = "") {
-    const heading = el("div", "results-heading");
-    heading.append(el("h2", "", title), el("span", "", detail));
-    return heading;
+  function sourceLocation(source) {
+    if (source.source_type === "pdf") {
+      return `PDF 第 ${source.pdf_page} 页${source.printed_page ? ` · 印刷页码 ${source.printed_page}` : ""}`;
+    }
+    return `${source.source_type === "web" ? "官方网页" : "收录文档"}${source.locator ? ` · ${source.locator}` : ""}`;
   }
 
-  function sourceButton(chunkId, label = "查看完整条目") {
-    const control = button(label, "text-button", () => openArticle(chunkId));
-    control.append(icon("arrow"));
+  function appendSourceLinks(target, source) {
+    const official = officialLink(source.official_url);
+    if (official) target.append(official);
+    for (const reference of source.supporting_sources || []) {
+      const link = officialLink(reference.official_url, `补充出处：${reference.title}`);
+      if (link) target.append(link);
+    }
+  }
+
+  function documentButton(chunk) {
+    // Coverage belongs to the document endpoint; never infer completeness from a chunk.
+    const control = button("查看已收录原文", "text-button", () => openDocument(chunk));
+    control.append(icon("book"));
     return control;
   }
 
   function sourceCard(chunk, index) {
-    const card = el("article", "card result-card");
-    const meta = el("div", "result-meta");
-    meta.append(
-      el("span", "result-number", String(index + 1).padStart(2, "0")),
-      el("span", `badge ${chunk.kind === "penalty" ? "blue" : "green"}`, kindNames[chunk.kind] || chunk.kind),
-      el("span", "badge amber", verificationNames[chunk.source.verification_status] || "待核验"),
-      el("span", "source-page", chunk.source.source_type === "web" ? `官网 · ${chunk.source.locator || "条文"}` : `PDF 第 ${chunk.source.pdf_page} 页`),
-    );
-    const footer = el("div", "result-footer");
-    footer.append(el("span", "", `${chunk.region} · ${chunk.domain} · ${chunk.id}`), sourceButton(chunk.id));
-    card.append(meta, el("h3", "", chunk.article), el("p", "source-text", chunk.text), footer);
+    const card = el("article", "source-card");
+    const heading = el("div", "source-heading");
+    if (index !== undefined) heading.append(el("span", "source-number", String(index + 1)));
+    const title = el("div");
+    title.append(el("h3", "", chunk.article), el("p", "source-document", chunk.source.document_title));
+    heading.append(title);
+    const actions = el("div", "source-actions");
+    actions.append(button("条文详情", "text-button", () => openArticle(chunk.id)), documentButton(chunk));
+    appendSourceLinks(actions, chunk.source);
+    card.append(heading, el("p", "original-text", chunk.text), el("p", "source-location", sourceLocation(chunk.source)), actions);
     return card;
   }
 
-  function renderRetrieval(target, data) {
-    target.replaceChildren(resultHeading("检索结果", `${data.hits.length} 条相关依据`));
-    target.append(el("p", "result-query", `本次查询：${data.question}`));
-    if (!data.hits.length) {
-      target.append(emptyState("当前资料中没有相关依据", "可尝试输入法规名称和条号，或补充具体行为。未命中不代表不存在相关规定。"));
-    } else {
-      data.hits.forEach((hit, index) => target.append(sourceCard(hit.chunk, index)));
-    }
-    if (data.coverage.length) {
-      const coverage = el("details", "coverage");
-      const list = el("ul");
-      data.coverage.forEach((text) => list.append(el("li", "", text)));
-      coverage.append(el("summary", "", "查看当前检索覆盖范围"), list);
-      target.append(coverage);
-    }
-  }
-
-  function followUp(questions, title = "还需要补充的信息") {
-    const box = el("section", "follow-up");
-    const list = el("ol");
-    questions.forEach((question) => list.append(el("li", "", question)));
-    box.append(el("h3", "", title), list);
-    return box;
-  }
-
-  function renderAnswer(target, data) {
-    target.replaceChildren();
-    let card;
-    if (data.status === "insufficient_evidence") {
-      card = emptyState("资料依据不足", data.answer, "book");
-    } else {
-      card = el("section", "card answer-card");
-      card.append(el("span", "badge green", "已生成 · 含来源引用"), el("h2", "dialog-section-title", "基于材料的解释"));
-      data.claims.forEach((claim) => {
-        const paragraph = el("p", "answer-claim");
-        paragraph.append(document.createTextNode(claim.text));
-        claim.citation_ids.forEach((id) => {
-          const index = data.sources.findIndex((source) => source.id === id);
-          const citation = button(`[${index + 1}]`, "citation", () => openArticle(id));
-          citation.setAttribute("aria-label", `查看引用 ${index + 1}：${data.sources[index]?.article || id}`);
-          paragraph.append(citation);
-        });
-        card.append(paragraph);
-      });
-    }
-    if (data.model || data.usage || data.status === "answered") {
-      const usage = data.usage ? ` · Token 用量 ${data.usage.total_tokens}` : "";
-      card.append(el("p", "answer-meta", `模型：${data.model || "未返回模型名称"}${usage}`));
-    }
-    card.append(notice(data.notice));
-    target.append(card);
-    if (data.follow_up_questions.length) target.append(followUp(data.follow_up_questions));
-    if (data.sources.length) {
-      const heading = resultHeading("引用原文", `${data.sources.length} 条来源`);
-      heading.classList.add("source-list-heading");
-      target.append(heading);
-      data.sources.forEach((source, index) => target.append(sourceCard(source, index)));
-    }
-    const sourceDocuments = data.source_documents ?? [];
-    if (sourceDocuments.length) {
-      const materials = el("details", "coverage");
-      materials.append(
-        el("summary", "", `本次检索资料（${sourceDocuments.length} 条）`),
-        el("p", "", "以下资料按检索排名展示，序号表示检索顺序。检索命中不代表足以支持回答；回答实际使用的资料见“引用原文”。"),
-      );
-      sourceDocuments.forEach((source, index) => materials.append(sourceCard(source, index)));
-      target.append(materials);
-    }
-  }
-
-  function setFormBusy(form, busy) {
-    form.dataset.loading = String(busy);
-    $$("button, input, select, textarea", form).forEach((control) => { control.disabled = busy; });
-  }
-
-  $$("[data-search]").forEach((form) => {
-    const mode = form.dataset.search;
-    const input = $("textarea", form);
-    const target = $(`#${mode}-results`);
-    function updateInput() {
-      input.setCustomValidity("");
-      $(`#${mode}-count`).textContent = `${input.value.length} / 2000`;
-    }
-    input.addEventListener("input", updateInput);
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing) {
-        event.preventDefault();
-        form.requestSubmit();
+  function renderAnswer(data) {
+    const sources = data.sources || [];
+    const card = el("section", "answer-card");
+    card.append(el("h2", "", data.status === "insufficient_evidence" ? "还需要更多依据" : "关于你的问题"));
+    const claims = data.claims || [];
+    if (!claims.length) card.append(el("p", "answer-claim", data.answer));
+    for (const claim of claims) {
+      const paragraph = el("p", "answer-claim", claim.text);
+      for (const id of claim.citation_ids || []) {
+        const index = sources.findIndex((source) => source.id === id);
+        if (index < 0) continue;
+        const citation = button(`[${index + 1}]`, "citation", () => openArticle(id));
+        citation.setAttribute("aria-label", `查看引用 ${index + 1}：${sources[index].article}`);
+        paragraph.append(citation);
       }
-    });
-    $$("[data-example]", form).forEach((control) => {
-      control.addEventListener("click", () => {
-        input.value = control.dataset.example;
-        updateInput();
-        input.focus();
-      });
-    });
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      if (form.dataset.loading === "true") return;
-      const question = input.value.trim();
-      if (question.length < 2) {
-        input.setCustomValidity("请输入至少两个字符的问题。");
-        input.reportValidity();
-        return;
-      }
-      const body = { question, top_k: Number($("select", form).value) };
-      const controller = new AbortController();
-      setFormBusy(form, true);
-      renderLoading(target, mode === "ask" ? "正在检索资料并生成解释，请稍候…" : "正在检索相关依据…", () => controller.abort());
-      try {
-        const data = await request(`/api/v1/${mode}`, { body, signal: controller.signal });
-        if (mode === "retrieve") renderRetrieval(target, data);
-        else renderAnswer(target, data);
-      } catch (error) {
-        if (error.name === "AbortError") target.replaceChildren(emptyState("已取消等待", "可以修改问题后再次提交。已发送的模型请求可能仍在服务端执行。"));
-        else renderError(target, error, () => form.requestSubmit());
-      } finally {
-        setFormBusy(form, false);
-        target.setAttribute("aria-busy", "false");
-      }
-    });
-  });
-
-  const factsForm = $("#facts-form");
-  const factsTarget = $("#facts-results");
-  function resetFactHighlights() {
-    $$(".field", factsForm).forEach((field) => field.classList.remove("is-missing"));
-  }
-
-  function renderFacts(data) {
-    const labels = {
-      needs_facts: ["需要补充事实", "点击缺失字段可返回对应输入位置。"],
-      needs_review: ["事实已填齐，仍需复核", "资料效力、适用条件和裁量边界尚未完成核验。"],
-      out_of_scope: ["超出当前规则范围", "当前规则草稿不能用于检查该地域或道路类型。"],
-    };
-    const [title, description] = labels[data.status];
-    const card = el("section", "card check-result");
-    card.append(el("span", "badge amber", "个案适用未核验"), el("h2", "", title), el("p", "", description));
-    if (data.missing_fields.length) {
-      card.append(el("h3", "", `待补充字段（${data.missing_fields.length}）`));
-      const fields = el("div", "missing-fields");
-      data.missing_fields.forEach((name) => {
-        const input = factsForm.elements.namedItem(name);
-        input?.closest(".field")?.classList.add("is-missing");
-        fields.append(button(fieldNames[name] || name, "missing-field", () => {
-          input?.scrollIntoView({ block: "center" });
-          input?.focus({ preventScroll: true });
+      card.append(paragraph);
+    }
+    if (data.notice) card.append(notice(data.notice));
+    results.replaceChildren(card);
+    if (data.follow_up_questions?.length) {
+      const followUp = el("section", "follow-up");
+      const list = el("ol");
+      data.follow_up_questions.forEach((question) => list.append(el("li", "", question)));
+      followUp.append(el("h2", "", "还需要了解这些情况"), list,
+        el("p", "", "请把补充信息写回上方问题，保留原有背景后再次发送。"),
+        button("补充情况", "text-button", () => {
+          const marker = "\n\n补充：";
+          if (!input.value.endsWith(marker) && input.value.length + marker.length <= input.maxLength) input.value += marker;
+          updateInput();
+          input.focus();
+          input.setSelectionRange(input.value.length, input.value.length);
+          input.scrollIntoView({ block: "center", behavior: "smooth" });
         }));
-      });
-      card.append(fields);
+      results.append(followUp);
     }
-    if (data.follow_up_questions.length) card.append(followUp(data.follow_up_questions, "需要核实的问题"));
-    if (data.review_notes.length) {
-      const notes = el("ul", "review-list");
-      data.review_notes.forEach((note) => notes.append(el("li", "", note)));
-      card.append(el("h3", "", "复核提醒"), notes);
+    if (sources.length) {
+      const section = el("section", "sources-section");
+      const heading = el("div", "results-heading");
+      heading.append(el("h2", "", "回答引用的原文"), el("span", "", `${sources.length} 条依据`));
+      section.append(heading);
+      sources.forEach((source, index) => section.append(sourceCard(source, index)));
+      results.append(section);
     }
-    if (data.rule_set) {
-      const rulesButton = button("查看关联规则草稿", "text-button", openRules);
-      rulesButton.style.marginTop = "18px";
-      rulesButton.append(icon("arrow"));
-      card.append(rulesButton);
-    }
-    factsTarget.replaceChildren(card);
-    factsTarget.dataset.hasResult = "true";
-    if (data.sources.length) {
-      const sources = el("details", "coverage");
-      const links = el("div", "rule-sources");
-      data.sources.forEach((source) => links.append(sourceButton(source.id, source.article)));
-      sources.append(el("summary", "", `查看 ${data.sources.length} 条关联依据`), links);
-      factsTarget.append(sources);
+    const citedIds = new Set(sources.map((source) => source.id));
+    const additional = (data.source_documents || []).filter((source) => !citedIds.has(source.id));
+    if (additional.length) {
+      const details = el("details", "additional-sources");
+      details.append(el("summary", "", `另有 ${additional.length} 条相关资料`),
+        el("p", "", "以下资料由检索找到，未作为本次回答的引用依据。"));
+      additional.forEach((source) => details.append(sourceCard(source)));
+      results.append(details);
     }
   }
 
-  factsForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (factsForm.dataset.loading === "true") return;
-    const body = { item_id: ITEM_ID, facts_verified: factsForm.elements.facts_verified.checked };
-    for (const name of ["region", "location", "occurred_on", "road_type", "behavior", "area_m2"]) {
-      const value = factsForm.elements.namedItem(name).value.trim();
-      if (value) body[name] = value;
-    }
-    const permission = factsForm.elements.has_permission.value;
-    if (permission !== "") body.has_permission = permission === "true";
-    // Empty values remain absent; in particular "false" is an explicit fact, not missing data.
-    resetFactHighlights();
-    factsTarget.dataset.hasResult = "false";
-    setFormBusy(factsForm, true);
-    renderLoading(factsTarget, "正在检查事实与复核事项…");
-    try {
-      renderFacts(await request("/api/v1/discretion/check", { body }));
-    } catch (error) {
-      renderError(factsTarget, error, () => factsForm.requestSubmit());
-    } finally {
-      setFormBusy(factsForm, false);
-      factsTarget.setAttribute("aria-busy", "false");
-    }
-  });
+  function updateInput() {
+    input.setCustomValidity("");
+    $("#ask-count").textContent = `${input.value.length} / 2000`;
+  }
 
-  factsForm.addEventListener("reset", () => {
-    resetFactHighlights();
-    factsTarget.dataset.hasResult = "false";
-    factsTarget.replaceChildren(emptyState("让待核实信息更清晰", "提交后将列出缺失事实、补充问题、边界与适用复核事项。", "clipboard"));
-  });
-  factsForm.addEventListener("input", () => {
-    if (factsTarget.dataset.hasResult === "true" && !$(".stale-notice", factsTarget)) {
-      const note = notice("表单已修改，以下结果对应上次提交；请重新检查。");
-      note.classList.add("stale-notice");
-      factsTarget.prepend(note);
+  function setBusy(busy) {
+    $$("button, textarea", form).forEach((control) => { control.disabled = busy; });
+    $("#send-question span").textContent = busy ? "正在回答" : "发送问题";
+    results.setAttribute("aria-busy", String(busy));
+  }
+
+  input.addEventListener("input", updateInput);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing) {
+      event.preventDefault();
+      form.requestSubmit();
     }
   });
-  $("#load-example").addEventListener("click", () => {
-    factsForm.reset();
-    factsForm.elements.region.value = "湖北省";
-    factsForm.elements.area_m2.value = "20";
-    factsForm.elements.region.focus();
-    toast("已载入缺失事实示例，点击“检查事实”查看结果。");
+  $$("[data-example]", form).forEach((control) => {
+    control.addEventListener("click", () => {
+      input.value = control.dataset.example;
+      updateInput();
+      input.focus();
+    });
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (questionController) return;
+    const question = input.value.trim();
+    if (question.length < 2 || question.length > 2000) {
+      input.setCustomValidity("请输入 2 至 2000 个字符的问题。");
+      input.reportValidity();
+      return;
+    }
+    const controller = new AbortController();
+    questionController = controller;
+    setBusy(true);
+    renderLoading(results, "正在查找依据并在线回答…", () => controller.abort());
+    try {
+      const data = await request("/api/v1/ask", { body: { question }, signal: controller.signal });
+      if (!controller.signal.aborted) renderAnswer(data);
+    } catch (error) {
+      if (error.name === "AbortError") {
+        results.replaceChildren(el("p", "empty-state", "已取消等待，可以修改问题后重新发送。"));
+      } else {
+        renderError(results, error, () => form.requestSubmit());
+      }
+    } finally {
+      questionController = undefined;
+      setBusy(false);
+    }
   });
 
   function metadata(entries) {
     const list = el("dl", "metadata");
     entries.forEach(([label, value]) => {
+      if (value === null || value === undefined || value === "") return;
       const row = el("div");
-      row.append(el("dt", "", label), el("dd", "", value === null || value === undefined || value === "" ? "未记录" : value));
+      row.append(el("dt", "", label), el("dd", "", value));
       list.append(row);
     });
     return list;
@@ -396,8 +283,8 @@
     dialogController = controller;
     $("#dialog-kicker").textContent = kicker;
     const target = $("#dialog-content");
-    renderLoading(target, "正在读取完整资料…");
-    const title = el("h2", "", "正在读取资料");
+    renderLoading(target, "正在读取原文…");
+    const title = el("h2", "", "正在读取原文");
     title.id = "dialog-title";
     target.prepend(title);
     dialog.scrollTop = 0;
@@ -412,71 +299,61 @@
       renderError(target, error, () => showDetail(kicker, loader, renderer));
       $("h2", target).id = "dialog-title";
     } finally {
-      if (!controller.signal.aborted) target.setAttribute("aria-busy", "false");
+      if (!controller.signal.aborted) {
+        target.setAttribute("aria-busy", "false");
+        const heading = $("#dialog-title", target);
+        heading.tabIndex = -1;
+        heading.focus({ preventScroll: true });
+      }
     }
   }
 
   function openArticle(id) {
-    return showDetail("原文与来源", (signal) => request(`/api/v1/articles/${encodeURIComponent(id)}`, { signal }), (target, chunk) => {
+    return showDetail("引用原文与出处", (signal) => request(`/api/v1/articles/${encodeURIComponent(id)}`, { signal }), (target, chunk) => {
       const title = el("h2", "", chunk.article);
       title.id = "dialog-title";
       const source = chunk.source;
-      target.append(el("span", "badge amber", verificationNames[source.verification_status] || "待核验"), title,
-        el("div", "original-text", chunk.text), el("h3", "dialog-section-title", "出处与核验记录"));
+      target.append(title, el("p", "document-meta", source.document_title), el("p", "original-text", chunk.text));
       target.append(metadata([
-        ["资料名称", source.document_title], ["来源文件", source.file],
-        ["原文位置", source.source_type === "web" ? `官方网页 · ${source.locator || "条文"}` : `PDF 第 ${source.pdf_page} 页`], ["印刷页码", source.printed_page],
-        ["效力层级", source.legal_level], ["检索整理日期", source.retrieved_on],
-        ["条目类型", kindNames[chunk.kind]], ["地域 / 领域", `${chunk.region} / ${chunk.domain}`],
-        ["条目编号", chunk.id], ["文档编号", chunk.document_id], ["资料版本", chunk.version_id],
+        ["原文位置", sourceLocation(source)], ["资料版本", chunk.version_id],
         ["发布机关", source.publisher], ["发布日期", source.published_on],
         ["施行日期", source.effective_on], ["失效日期", source.expires_on],
-        ["转录核对日期", source.transcription_checked_on], ["文件 SHA-256", source.sha256],
+        ["效力层级", source.legal_level], ["来源核对日期", source.transcription_checked_on],
       ]));
-      const references = [
-        { official_url: source.official_url, title: "查看官方来源" },
-        ...(source.supporting_sources || []).map((ref) => ({ ...ref, title: `合并依据：${ref.title} · ${ref.locator}` })),
-      ];
-      for (const ref of references) {
-        if (!ref.official_url) continue;
-        try {
-          const url = new URL(ref.official_url);
-          if (["https:", "http:"].includes(url.protocol)) {
-            const link = el("a", "text-link", ref.title);
-            link.href = url.href;
-            link.target = "_blank";
-            link.rel = "noopener noreferrer";
-            link.append(icon("external"));
-            target.append(link);
-          }
-        } catch { /* An invalid source URL must not prevent reading the original text. */ }
-      }
-      target.append(notice(source.verification_note));
+      const actions = el("div", "source-actions");
+      actions.append(documentButton(chunk));
+      appendSourceLinks(actions, source);
+      target.append(actions);
+      if (source.verification_note) target.append(notice(source.verification_note));
     });
   }
 
-  function openRules() {
-    return showDetail("裁量规则 · 转录草稿", (signal) => request(`/api/v1/discretion/${ITEM_ID}`, { signal }), (target, rules) => {
-      const title = el("h2", "", rules.name);
+  function openDocument(chunk) {
+    const path = `/api/v1/documents/${encodeURIComponent(chunk.document_id)}?version_id=${encodeURIComponent(chunk.version_id)}`;
+    return showDetail("已收录原文", (signal) => request(path, { signal }), (target, data) => {
+      const title = el("h2", "", data.title);
       title.id = "dialog-title";
-      target.append(el("span", "badge amber", "草稿 · 未核验"), title,
-        notice("以下为材料中的档次原文，尚未确定个案适用和边界含义；不自动选择档次或计算罚款。"));
-      rules.bands.forEach((band, index) => {
-        const card = el("section", "rule-band");
-        card.append(el("span", "", `原表第 ${index + 1} 档`), el("h3", "", band.condition_text), el("p", "", band.consequence_text));
-        target.append(card);
-      });
-      target.append(el("h3", "dialog-section-title", "需要复核的事项"));
-      const notes = el("ul", "review-list");
-      rules.review_notes.forEach((note) => notes.append(el("li", "", note)));
-      target.append(notes, metadata([["规则版本", rules.version_id], ["待核验边界", `${rules.unresolved_boundaries_m2.join("、")} 平方米`]]));
-      const sources = el("div", "rule-sources");
-      rules.source_ids.forEach((id) => sources.append(sourceButton(id, id)));
-      target.append(el("h3", "dialog-section-title", "规则关联条目"), sources);
+      const articles = data.articles || [];
+      const coverage = coverageNames[data.coverage] || "已收录原文";
+      $("#dialog-kicker").textContent = coverage;
+      target.append(title, el("p", "document-meta", `${coverage} · ${articles.length} 条原文 · 版本 ${data.version_id}`));
+      if (data.coverage_note) target.append(notice(data.coverage_note));
+      if (data.coverage !== "full_text") target.append(notice("这里展示目前已收录的内容，不代表整部法规全文。"));
+      const articleList = el("div", "document-articles");
+      for (const article of articles) {
+        const section = el("section", "document-article");
+        section.append(el("h3", "", article.article), el("p", "original-text", article.text),
+          el("p", "source-location", sourceLocation(article.source)));
+        const actions = el("div", "source-actions");
+        appendSourceLinks(actions, article.source);
+        if (actions.childElementCount) section.append(actions);
+        articleList.append(section);
+      }
+      if (!articles.length) articleList.append(el("p", "empty-state", "这份资料暂时没有可显示的原文。"));
+      target.append(articleList);
     });
   }
 
-  $("#open-rules").addEventListener("click", openRules);
   $("#close-dialog").addEventListener("click", () => dialog.close());
   dialog.addEventListener("close", () => dialogController?.abort());
   dialog.addEventListener("click", (event) => {
@@ -490,74 +367,22 @@
     healthLoading = true;
     const control = $("#refresh-health");
     control.disabled = true;
-    $("#health-error").hidden = true;
     try {
       const data = await request("/health");
-      $$("[data-health]").forEach((element) => { element.textContent = data[element.dataset.health] ?? "—"; });
-      $("#sidebar-status").className = "status-dot";
-      $("#sidebar-status").setAttribute("aria-label", "服务在线");
-      $("#app-version").textContent = `v${data.version}`;
-      $("#backend-status").textContent = data.status === "ok" ? "运行正常" : "状态异常";
-      $("#health-checked-at").textContent = `更新于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
-      $("#health-model").textContent = data.llm_model;
-      const retrievalMode = { bm25: "本地 BM25 · 离线可用", chroma: "在线向量检索", hybrid: "混合检索 · BM25 + 向量 + RRF" };
-      $("#retrieval-mode").textContent = (retrievalMode[data.retrieval_backend] || "未知检索模式")
-        + (data.retrieval_backend !== "bm25" && !data.embedding_configured ? " · 未配置密钥" : "");
-      $("#status-model-badge").textContent = data.llm_configured ? "密钥已配置" : "未配置密钥";
-      $("#status-model-badge").className = `badge ${data.llm_configured ? "green" : "amber"}`;
-      $("#model-config-label").textContent = data.llm_configured ? "密钥已配置" : "尚未配置密钥";
-      $("#model-config-detail").textContent = data.llm_configured
-        ? `当前模型为 ${data.llm_model}。配置已读取，实际连通性尚未检测。`
-        : "在本地 .env 中填写 DeepSeek API Key 并重启服务后，即可使用命中资料后的模型解释。";
-    } catch (error) {
-      $("#sidebar-status").className = "status-dot offline";
-      $("#sidebar-status").setAttribute("aria-label", "服务连接失败");
-      $("#backend-status").textContent = "连接失败";
-      $("#health-checked-at").textContent = "无法获取最新状态";
-      $$("[data-health]").forEach((element) => { element.textContent = "—"; });
-      $("#app-version").textContent = "—";
-      $("#health-model").textContent = "—";
-      $("#retrieval-mode").textContent = "检索配置不可用";
-      $("#status-model-badge").textContent = "状态未知";
-      $("#status-model-badge").className = "badge amber";
-      $("#model-config-label").textContent = "无法读取配置";
-      $("#model-config-detail").textContent = "请确认本地服务已启动，稍后在服务状态中刷新。";
-      const errorBox = $("#health-error");
-      errorBox.replaceChildren(notice(error.message, "error"));
-      errorBox.hidden = false;
+      const configured = data.llm_configured === true && data.embedding_configured === true;
+      $("#service-label").textContent = configured ? "在线配置已就绪" : "问答待配置";
+      $("#service-dot").className = `status-dot${configured ? "" : " unavailable"}`;
+      control.title = configured ? "服务可访问，两项在线配置已就绪；模型连接将在提问时检查。点击刷新状态。" : "服务可访问，在线问答所需配置尚未完成；模型连接将在提问时检查。点击刷新状态。";
+    } catch {
+      $("#service-label").textContent = "服务未连接";
+      $("#service-dot").className = "status-dot unavailable";
+      control.title = "暂时无法连接服务，点击重试。";
     } finally {
       healthLoading = false;
       control.disabled = false;
     }
   }
 
-  function switchView(focus = false) {
-    const requested = location.hash.slice(1);
-    const name = Object.hasOwn(viewNames, requested) ? requested : "retrieve";
-    $$(".view").forEach((view) => { view.hidden = view.id !== `view-${name}`; });
-    $$("[data-view]").forEach((link) => {
-      const selected = link.dataset.view === name;
-      link.classList.toggle("active", selected);
-      if (selected) link.setAttribute("aria-current", "page");
-      else link.removeAttribute("aria-current");
-    });
-    $("#current-page").textContent = viewNames[name];
-    document.title = `${viewNames[name]} · 湖北交通法规助手`;
-    if (focus) {
-      const heading = $(`#${name}-title`);
-      heading.tabIndex = -1;
-      heading.focus({ preventScroll: true });
-      window.scrollTo({ top: 0 });
-    }
-    if (name === "status") refreshHealth();
-  }
-
   $("#refresh-health").addEventListener("click", refreshHealth);
-  $(".skip-link").addEventListener("click", (event) => {
-    event.preventDefault();
-    $("#main-content").focus();
-  });
-  window.addEventListener("hashchange", () => switchView(true));
-  switchView();
   refreshHealth();
 })();

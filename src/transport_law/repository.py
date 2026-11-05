@@ -38,6 +38,11 @@ class LawRepository:
         return cls(chunks)
 
     @property
+    def all_chunks(self) -> list[LegalChunk]:
+        """包括历史版本的正文，用于按来源和版本查看原文。"""
+        return list(self._by_id.values())
+
+    @property
     def searchable(self) -> list[LegalChunk]:
         return [
             chunk

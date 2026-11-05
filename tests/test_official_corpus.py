@@ -88,13 +88,25 @@ def test_web_sources_reject_fabricated_pdf_page(repository):
         Source.model_validate(raw)
 
 
-def test_official_article_api_has_real_web_provenance(settings):
+def test_official_article_api_has_real_web_provenance(settings, retriever):
+    selected = retriever.search("行政处罚法第33条", 1)[0].chunk
     with TestClient(create_app(settings)) as client:
-        result = client.post("/api/v1/retrieve", json={"question": "行政处罚法第33条"})
+        result = client.get(f"/api/v1/articles/{selected.id}")
         assert result.status_code == 200
-        source = result.json()["hits"][0]["chunk"]["source"]
+        assert result.json() == selected.model_dump(mode="json")
+        source = result.json()["source"]
         assert source["source_type"] == "web" and source["pdf_page"] is None
         assert source["official_url"].startswith("https://www.miit.gov.cn/")
+        document = client.get(
+            f"/api/v1/documents/{selected.document_id}",
+            params={"version_id": selected.version_id},
+        )
+        assert document.status_code == 200
+        body = document.json()
+        assert body["coverage"] == "full_text"
+        assert body["version_id"] == selected.version_id
+        assert [article["article_number"] for article in body["articles"]] == list(range(1, 87))
+        assert body["articles"][32] == result.json()
 
 
 def test_official_retrieval_regressions(retriever):

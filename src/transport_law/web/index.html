@@ -3,136 +3,44 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#162d29">
-  <meta name="description" content="湖北交通运输法规与裁量助手：检索原文、查看引用、核对案件事实。">
-  <title>法规检索 · 湖北交通法规助手</title>
+  <meta name="theme-color" content="#173d33">
+  <meta name="description" content="用自己的话提问，了解湖北交通法规与裁量依据，查看引用原文和官方出处。">
+  <title>湖北交通法规助手</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/app.js" defer></script>
 </head>
 <body>
   <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
     <symbol id="i-book" viewBox="0 0 24 24"><path d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Zm0 0v15M6 8h3m-3 4h3m6-4h3m-3 4h3"/></symbol>
-    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 2.7 6.3L21 12l-6.3 2.7L12 21l-2.7-6.3L3 12l6.3-2.7L12 3Zm8-1v4m-2-2h4"/></symbol>
-    <symbol id="i-clipboard" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><rect x="9" y="2" width="6" height="4" rx="1"/><path d="m9 12 2 2 4-4m-6 7h6"/></symbol>
-    <symbol id="i-status" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></symbol>
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
     <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L11 13m-1-9H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-5"/></symbol>
-    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.1"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
-    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7a9 9 0 0 0-15-2L2 8m0-6v6h6m-4 9a9 9 0 0 0 15 2l3-3m0 6v-6h-6"/></symbol>
-    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
-    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9l-7-7Zm0 0v7h7M7 14h10M7 18h6"/></symbol>
   </svg>
   <a class="skip-link" href="#main-content">跳转到主要内容</a>
-  <aside class="sidebar">
-    <a class="brand" href="#retrieve" aria-label="湖北交通法规助手首页">
-      <img src="/static/favicon.svg" alt="" width="40" height="40">
-      <span><strong>湖北交通</strong><small>法规与裁量助手</small></span>
-    </a>
-    <div class="workspace-label">执法学习工作台 <span>LOCAL</span></div>
-    <nav class="main-nav" aria-label="功能导航">
-      <a class="nav-link active" href="#retrieve" data-view="retrieve" aria-current="page"><svg class="icon"><use href="#i-search"/></svg><span>法规检索</span><span class="nav-index">01</span></a>
-      <a class="nav-link" href="#ask" data-view="ask"><svg class="icon"><use href="#i-spark"/></svg><span>带依据问答</span><span class="nav-index">02</span></a>
-      <a class="nav-link" href="#facts" data-view="facts"><svg class="icon"><use href="#i-clipboard"/></svg><span>裁量辅助</span><span class="nav-index">03</span></a>
-    </nav>
-    <div class="sidebar-note"><svg class="icon"><use href="#i-book"/></svg><p>让每一条解释<br>都有原文可循。</p><span>检索 · 引用 · 复核</span></div>
-    <div class="sidebar-bottom">
-      <a class="nav-link" href="#status" data-view="status"><svg class="icon"><use href="#i-status"/></svg><span>服务状态</span><span id="sidebar-status" class="status-dot pending" aria-label="正在检查服务"></span></a>
-      <div class="sidebar-caption"><span>本地学习原型</span><span id="app-version">—</span></div>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="湖北交通法规助手首页"><img src="/static/favicon.svg" alt="" width="36" height="36"><span>湖北交通<span class="brand-detail">法规助手</span></span></a>
+    <button id="refresh-health" class="service-status" type="button" title="刷新服务状态"><span id="service-dot" class="status-dot pending" aria-hidden="true"></span><span id="service-label" role="status">正在连接</span></button>
+  </header>
+  <main id="main-content" tabindex="-1">
+    <noscript><div class="notice error">请启用 JavaScript 后使用在线问答。</div></noscript>
+    <section class="intro" aria-labelledby="page-title">
+      <span class="eyebrow">交通法规 · 处理依据 · 裁量参考</span>
+      <h1 id="page-title">有交通法规问题？<br><span>直接说说你的情况。</span></h1>
+      <p>用自己的话提问，回答与出处一起看。</p>
+    </section>
+    <form id="ask-form" class="question-card">
+      <label for="ask-question">你想了解什么？</label>
+      <textarea id="ask-question" name="question" rows="4" minlength="2" maxlength="2000" required placeholder="例如：在湖北一段普通公路上，施工队没办许可就挖沟埋管。这种情况该怎么处理，有什么依据？" aria-describedby="ask-hint ask-count"></textarea>
+      <div class="question-toolbar"><span id="ask-count" class="char-count">0 / 2000</span><div class="submit-group"><span class="keyboard-hint">Ctrl / ⌘ + Enter</span><button id="send-question" type="submit" class="button primary"><span>发送问题</span><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div></div>
+      <div class="examples" aria-label="提问示例"><span>试着问</span><button type="button" data-example="在湖北一段普通公路上，施工队没办许可就挖沟埋管。这种情况该怎么处理，有什么依据？">公路上挖沟，怎么办？</button><button type="button" data-example="占用公路施工需要办什么手续？请给我相关规定和原文。">占道施工需要哪些手续？</button><button type="button" data-example="在湖北普通公路上未经许可占道施工，想了解处罚和裁量依据，还需要核实哪些情况？">处罚前还要核实什么？</button></div>
+    </form>
+    <p id="ask-hint" class="input-hint">每次提问独立处理。补充情况时，请把原有背景和新增信息写在同一个问题里。</p>
+    <div id="ask-results" class="results" role="region" aria-label="回答与依据" aria-live="polite" aria-busy="false">
+      <div class="empty-state"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg><p>发送后，这里会显示在线回答、需要补充的信息和引用原文。</p></div>
     </div>
-  </aside>
-
-  <div class="app-shell">
-    <header class="topbar">
-      <div class="breadcrumb">工作台 <span>/</span> <strong id="current-page">法规检索</strong></div>
-      <div class="topbar-actions"><span class="local-tag"><span class="status-dot"></span>本地工作空间</span><a href="/docs" target="_blank" rel="noopener" class="docs-link">接口文档 <svg class="icon"><use href="#i-external"/></svg></a></div>
-    </header>
-
-    <main id="main-content" tabindex="-1">
-      <noscript><div class="notice error">请在浏览器中启用 JavaScript，以使用检索、问答和事实检查。</div></noscript>
-      <section id="view-retrieve" class="view" aria-labelledby="retrieve-title">
-        <div class="page-heading"><div><div class="eyebrow">LEGAL REFERENCE</div><h1 id="retrieve-title">法规检索</h1><p>从具体行为出发，查找相关原文与出处。</p></div><span id="retrieval-mode" class="badge">正在读取检索配置</span></div>
-        <div class="workspace-grid">
-          <div class="primary-column">
-            <form id="retrieve-form" class="card query-card" data-search="retrieve">
-              <label class="form-title" for="retrieve-question">需要查找什么依据？</label>
-              <p class="form-description" id="retrieve-hint">输入行为描述、法规名称或条号，尽量包含道路和行为信息。</p>
-              <div class="textarea-wrap"><textarea id="retrieve-question" name="question" rows="4" minlength="2" maxlength="2000" required placeholder="例如：没办手续就在公路上挖沟，有哪些相关规定？" aria-describedby="retrieve-hint"></textarea><span class="char-count" id="retrieve-count">0 / 2000</span></div>
-              <div class="query-toolbar"><label class="select-inline" for="retrieve-top-k">最多返回 <select id="retrieve-top-k" name="top_k"><option value="3">3 条</option><option value="5" selected>5 条</option><option value="10">10 条</option></select></label><div class="submit-group"><span class="keyboard-hint">Ctrl / ⌘ + Enter</span><button type="submit" class="button primary"><svg class="icon"><use href="#i-search"/></svg><span>检索依据</span></button></div></div>
-              <div class="examples"><span>试试这样搜</span><button type="button" data-example="在公路上挖沟，需要查哪些依据？">公路开挖</button><button type="button" data-example="占道施工需要办理许可吗？">占道施工许可</button><button type="button" data-example="公路法第四十四条如何规定？">公路法第四十四条</button></div>
-            </form>
-            <div id="retrieve-results" class="results" role="region" aria-label="检索结果" aria-live="polite">
-              <div class="empty-state"><span class="empty-icon"><svg class="icon"><use href="#i-book"/></svg></span><h2>依据，从这里开始</h2><p>输入问题后，这里会展示相关条目、原文和来源页码。</p><div class="empty-steps"><span>01 描述行为</span><i></i><span>02 检索原文</span><i></i><span>03 核对出处</span></div></div>
-            </div>
-          </div>
-          <aside class="context-column" aria-label="资料范围与使用说明">
-            <section class="card scope-card"><div class="section-kicker"><svg class="icon"><use href="#i-book"/></svg>当前资料范围</div><h2>交通法规<br>与裁量资料</h2><div class="scope-tags"><span>国家及湖北法规</span><span>执法程序</span></div><div class="scope-stats"><div><strong data-health="chunk_count">—</strong><span>已收录条目</span></div><div><strong data-health="item_count">—</strong><span>资料主题</span></div></div><p class="scope-footnote">含交通运输、公安交管法规及裁量资料，共 17 份整理文档。裁量辅助仍限普通公路占用、挖掘事项。</p></section>
-            <section class="guide-card"><h3>每一条结果，都能追溯</h3><div class="guide-item"><span>1</span><div><strong>查看材料原文</strong><p>区分法规正文、程序依据和裁量基准。</p></div></div><div class="guide-item"><span>2</span><div><strong>核对来源与版本</strong><p>打开完整条目，查看官网条号或 PDF 页码及核验记录。</p></div></div><div class="guide-item"><span>3</span><div><strong>结合个案复核</strong><p>检索命中不代表材料适用于当前案件。</p></div></div></section>
-            <div class="notice subtle"><svg class="icon"><use href="#i-info"/></svg><p>材料效力与个案适用待核验，裁量规则为草稿。</p></div>
-          </aside>
-        </div>
-      </section>
-
-      <section id="view-ask" class="view" aria-labelledby="ask-title" hidden>
-        <div class="page-heading"><div><div class="eyebrow">EVIDENCE-BASED ANSWERS</div><h1 id="ask-title">带依据问答</h1><p>检索材料，再生成可逐条核对引用的解释。</p></div><span class="badge neutral">DeepSeek 辅助解释</span></div>
-        <div class="workspace-grid"><div class="primary-column">
-          <form id="ask-form" class="card query-card" data-search="ask">
-            <label class="form-title" for="ask-question">描述你想了解的问题</label><p class="form-description" id="ask-hint">每次提问独立处理；请在问题中提供完整背景。</p>
-            <div class="textarea-wrap"><textarea id="ask-question" name="question" rows="4" minlength="2" maxlength="2000" required placeholder="例如：未经许可在普通公路上挖沟，材料有哪些规定，还需要核实什么？" aria-describedby="ask-hint ask-send-note"></textarea><span class="char-count" id="ask-count">0 / 2000</span></div>
-            <div class="query-toolbar"><label class="select-inline" for="ask-top-k">检索条目 <select id="ask-top-k" name="top_k"><option value="3">3 条</option><option value="5" selected>5 条</option><option value="10">10 条</option></select></label><div class="submit-group"><span class="keyboard-hint">Ctrl / ⌘ + Enter</span><button type="submit" class="button primary"><svg class="icon"><use href="#i-spark"/></svg><span>生成解释</span></button></div></div>
-            <p id="ask-send-note" class="form-footnote">命中资料后，将问题和检索材料发送至已配置的 DeepSeek 服务，并使用 API 额度。</p>
-          </form>
-          <div id="ask-results" class="results" role="region" aria-label="问答结果" aria-live="polite"><div class="empty-state"><span class="empty-icon"><svg class="icon"><use href="#i-spark"/></svg></span><h2>把解释与依据放在一起</h2><p>生成后可点击引用编号，查看对应条目的完整原文。</p></div></div>
-        </div><aside class="context-column" aria-label="问答使用说明">
-          <section class="card model-card"><div class="section-kicker"><svg class="icon"><use href="#i-status"/></svg>模型配置</div><h2 id="model-config-label">正在检查…</h2><p id="model-config-detail">正在读取本地配置状态。</p><a href="#status" class="text-link">查看服务状态 <svg class="icon"><use href="#i-arrow"/></svg></a></section>
-          <section class="guide-card"><h3>如何阅读回答</h3><p>解释后的引用编号对应本次检索到的资料，点击即可对照原文。</p><p>引用校验仅确认出处来自本次检索；解释内容仍需人工核对。</p><p>当前没有多轮记忆，也不生成确定的处罚结论。</p></section>
-        </aside></div>
-      </section>
-
-      <section id="view-facts" class="view" aria-labelledby="facts-title" hidden>
-        <div class="page-heading"><div><div class="eyebrow">CASE FACTS REVIEW</div><h1 id="facts-title">裁量辅助</h1><p>整理已知事实，找出需要补充和复核的信息。</p></div><button type="button" id="open-rules" class="button secondary"><svg class="icon"><use href="#i-book"/></svg>查看规则草稿</button></div>
-        <div class="notice fact-notice"><svg class="icon"><use href="#i-info"/></svg><p>当前仅覆盖湖北普通公路“擅自占用、挖掘公路”。只检查事实与复核事项，不自动匹配罚款档次。</p></div>
-        <div class="facts-layout">
-          <form id="facts-form" class="card facts-card">
-            <div class="card-heading"><h2>案件事实</h2><button type="button" id="load-example" class="text-button">载入示例</button></div>
-            <p class="form-description">只填写已知信息；未核实的字段可以留空。</p>
-            <div class="fields-grid">
-              <div class="field"><label for="fact-region">案发省份</label><input id="fact-region" name="region" placeholder="如：湖北省" autocomplete="off"></div>
-              <div class="field"><label for="fact-date">发生日期</label><input id="fact-date" name="occurred_on" type="date"></div>
-              <div class="field full-width"><label for="fact-location">具体地点</label><input id="fact-location" name="location" placeholder="市县、路段或桩号" autocomplete="off"></div>
-              <div class="field"><label for="fact-road">道路类型</label><select id="fact-road" name="road_type"><option value="">未提供 / 待核实</option><option value="ordinary_highway">普通公路</option><option value="expressway">高速公路</option><option value="urban_road">城市道路</option><option value="other">其他道路</option></select></div>
-              <div class="field"><label for="fact-behavior">具体行为</label><select id="fact-behavior" name="behavior"><option value="">未提供 / 待核实</option><option value="occupation">占用公路</option><option value="excavation">挖掘公路</option><option value="both">占用与挖掘</option></select></div>
-              <div class="field"><label for="fact-permission">是否取得相关许可</label><select id="fact-permission" name="has_permission"><option value="">未提供 / 待核实</option><option value="true">是，已取得</option><option value="false">否，未取得</option></select></div>
-              <div class="field"><label for="fact-area">占用 / 挖掘面积 <span>m²</span></label><input id="fact-area" name="area_m2" type="number" min="0.0001" max="99999999.9999" step="0.0001" inputmode="decimal" placeholder="请输入实际面积"></div>
-            </div>
-            <label class="checkbox-label" for="fact-verified"><input id="fact-verified" name="facts_verified" type="checkbox"><span>已人工核实以上填写的事实<small>此项仅记录填写者声明，不代表审批或核准。</small></span></label>
-            <div class="form-actions"><button type="reset" class="button secondary">清空</button><button type="submit" class="button primary"><svg class="icon"><use href="#i-clipboard"/></svg><span>检查事实</span></button></div>
-          </form>
-          <div id="facts-results" class="results facts-results" role="region" aria-label="事实检查结果" aria-live="polite"><div class="empty-state"><span class="empty-icon"><svg class="icon"><use href="#i-clipboard"/></svg></span><h2>让待核实信息更清晰</h2><p>提交后将列出缺失事实、补充问题、<br>边界与适用复核事项。</p><span class="badge neutral">无需 API Key</span></div></div>
-        </div>
-      </section>
-
-      <section id="view-status" class="view" aria-labelledby="status-title" hidden>
-        <div class="page-heading"><div><div class="eyebrow">LOCAL WORKSPACE</div><h1 id="status-title">服务状态</h1><p>查看资料数量与本地模型配置状态。</p></div><button type="button" id="refresh-health" class="button secondary"><svg class="icon"><use href="#i-refresh"/></svg><span>刷新状态</span></button></div>
-        <div id="health-error" role="alert" hidden></div>
-        <div class="status-grid">
-          <section class="card metric"><span>后端服务</span><strong id="backend-status">检查中</strong><small id="health-checked-at">尚未获取状态</small></section>
-          <section class="card metric"><span>已收录条目</span><strong data-health="chunk_count">—</strong><small>当前可检索的资料条目</small></section>
-          <section class="card metric"><span>资料主题</span><strong data-health="item_count">—</strong><small>收录法规与关联事项的主题数量</small></section>
-          <section class="card metric"><span>待核验条目</span><strong data-health="pending_verification_count">—</strong><small>效力与适用仍需核实</small></section>
-        </div>
-        <div class="status-detail-grid">
-          <section class="card settings-card"><div class="card-heading"><h2>DeepSeek 连接配置</h2><span class="badge neutral" id="status-model-badge">检查中</span></div><dl class="metadata"><div><dt>模型名称</dt><dd id="health-model">—</dd></div><div><dt>连接状态</dt><dd>未检测实际连通性</dd></div><div><dt>密钥存放</dt><dd>项目根目录的 .env 文件</dd></div></dl><div class="notice subtle"><svg class="icon"><use href="#i-info"/></svg><p>配置状态只表示密钥是否非空；不会发起模型请求，也不代表模型可正常调用。</p></div><p class="form-footnote">在本地 .env 中设置 DEEPSEEK_API_KEY 后重启服务。检索与裁量事实检查无需密钥。</p></section>
-          <section class="card settings-card"><div class="card-heading"><h2>使用说明</h2><svg class="icon muted"><use href="#i-book"/></svg></div><ul class="help-list"><li>页面与接口由同一 Python 服务提供。</li><li>问答按单次问题处理，不保留对话记忆。</li><li>表单与结果只保留在当前页面，刷新即清除。</li><li>新增资料或修改模型配置后，需要重启服务。</li></ul><a href="/docs" target="_blank" rel="noopener" class="text-link">打开交互式接口文档 <svg class="icon"><use href="#i-external"/></svg></a></section>
-        </div>
-      </section>
-      <footer class="page-footer"><span>湖北交通运输法规与裁量助手</span><span>原文可追溯 · 适用需复核</span></footer>
-    </main>
-  </div>
-
-  <dialog id="detail-dialog" aria-labelledby="dialog-title"><div class="dialog-header"><span class="section-kicker" id="dialog-kicker">资料详情</span><button type="button" id="close-dialog" class="icon-button" aria-label="关闭详情" autofocus><svg class="icon"><use href="#i-close"/></svg></button></div><div id="dialog-content"></div></dialog>
-  <div id="toast" class="toast" role="status" hidden></div>
+    <footer class="page-footer">依据已收录资料回答 · 引用可查看原文与出处 · 个案适用需核实</footer>
+  </main>
+  <dialog id="detail-dialog" aria-labelledby="dialog-title"><div class="dialog-header"><span id="dialog-kicker" class="eyebrow">原文与出处</span><button type="button" id="close-dialog" class="icon-button" aria-label="关闭原文" autofocus><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></div><div id="dialog-content"></div></dialog>
 </body>
 </html>

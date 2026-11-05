@@ -1,9 +1,11 @@
+import json
 import threading
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
-from transport_law.cli import parser
+from transport_law.cli import parser, run
 from transport_law.config import Settings
 from transport_law.errors import AppError
 from transport_law.hybrid import HybridRetriever, reciprocal_rank_fusion
@@ -142,7 +144,91 @@ def test_hybrid_settings_validate_windows(settings, update):
         Settings(_env_file=None, **(settings.model_dump() | update))
 
 
-@pytest.mark.parametrize("command", ["retrieve", "ask", "evaluate"])
-def test_cli_accepts_hybrid_backend(command):
-    args = [command] + ([] if command == "evaluate" else ["公路挖沟"])
-    assert parser().parse_args(args + ["--backend", "hybrid"]).backend == "hybrid"
+@pytest.mark.parametrize("backend", ["bm25", "chroma", "hybrid"])
+def test_cli_backend_selection_is_only_available_for_evaluation(backend):
+    assert parser().parse_args(["evaluate", "--backend", backend]).backend == backend
+    with pytest.raises(SystemExit) as exc:
+        parser().parse_args(["ask", "公路挖沟", "--backend", backend])
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("command", ["retrieve", "chat", "check-facts"])
+def test_cli_removes_separate_product_modes(command):
+    with pytest.raises(SystemExit) as exc:
+        parser().parse_args([command, "公路挖沟"])
+    assert exc.value.code == 2
+
+
+def test_cli_ask_uses_shared_runtime_and_preserves_question_and_limit(
+    settings, monkeypatch, capsys
+):
+    seen = []
+
+    class Service:
+        async def ask(self, request):
+            seen.append(request)
+            return {"answer": "已根据资料说明。", "sources": []}
+
+    def runtime(config):
+        assert config is settings
+        return SimpleNamespace(service=Service())
+
+    monkeypatch.setattr("transport_law.cli.Settings", lambda: settings)
+    monkeypatch.setattr("transport_law.cli.build_runtime", runtime)
+    args = parser().parse_args(["ask", "  公路挖沟如何处理？  ", "--top-k", "3"])
+    assert not hasattr(args, "backend")
+    assert run(args) == 0
+    assert seen[0].question == "公路挖沟如何处理？" and seen[0].top_k == 3
+    assert json.loads(capsys.readouterr().out)["answer"] == "已根据资料说明。"
+
+
+def test_cli_local_validation_does_not_build_online_runtime(settings, monkeypatch, capsys):
+    def unexpected_runtime(*args, **kwargs):
+        pytest.fail("本地资料检查不得初始化在线问答运行时")
+
+    monkeypatch.setattr("transport_law.cli.Settings", lambda: settings)
+    monkeypatch.setattr("transport_law.cli.build_runtime", unexpected_runtime)
+    assert run(parser().parse_args(["validate-data"])) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "ok" and result["chunks"] > 0
+    assert result["rule_status"] == "draft"
+
+
+def test_cli_default_evaluation_remains_offline(settings, monkeypatch, capsys):
+    def unexpected_runtime(*args, **kwargs):
+        pytest.fail("检索评估不得初始化在线问答运行时")
+
+    monkeypatch.setattr("transport_law.cli.Settings", lambda: settings)
+    monkeypatch.setattr("transport_law.cli.build_runtime", unexpected_runtime)
+    assert run(parser().parse_args(["evaluate"])) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["backend"] == "bm25"
+    assert result["passed"] == result["total"] > 0
+
+
+@pytest.mark.parametrize("backend", ["chroma", "hybrid"])
+def test_cli_evaluation_uses_independent_retriever(settings, monkeypatch, capsys, backend):
+    selected = []
+
+    class EvaluationRetriever:
+        def __init__(self, repository, config):
+            assert config is settings and repository.searchable
+            selected.append(self)
+
+    def evaluate(dataset, retriever):
+        assert retriever is selected[0]
+        return {"passed": 1, "total": 2}
+
+    def unexpected_runtime(*args, **kwargs):
+        pytest.fail("检索评估不得初始化在线问答运行时")
+
+    target = {
+        "chroma": "transport_law.vector_store.ChromaRetriever",
+        "hybrid": "transport_law.hybrid.HybridRetriever",
+    }[backend]
+    monkeypatch.setattr(target, EvaluationRetriever)
+    monkeypatch.setattr("transport_law.cli.Settings", lambda: settings)
+    monkeypatch.setattr("transport_law.cli.build_runtime", unexpected_runtime)
+    monkeypatch.setattr("transport_law.cli.evaluate_retrieval", evaluate)
+    assert run(parser().parse_args(["evaluate", "--backend", backend])) == 1
+    assert json.loads(capsys.readouterr().out) == {"passed": 1, "total": 2, "backend": backend}

@@ -282,7 +282,12 @@ class ChromaRetriever:
         return self.rank_candidates(question, self.scope.candidate_chunks(question), limit=top_k)
 
     def rank_candidates(
-        self, question: str, chunks: list[LegalChunk], *, limit: int
+        self,
+        question: str,
+        chunks: list[LegalChunk],
+        *,
+        limit: int,
+        query_vector: list[float] | None = None,
     ) -> list[SearchHit]:
         """先聚合子块为父法条，再按父法条数量截取召回窗口。"""
         if not 1 <= limit <= 200:
@@ -290,7 +295,7 @@ class ChromaRetriever:
         parents = {chunk.id: chunk for chunk in chunks}
         if not parents:
             return []
-        vector = self.embedder.embed_query(question)
+        vector = query_vector if query_vector is not None else self.embedder.embed_query(question)
         with chroma_errors():
             where = {"parent_id": {"$in": list(parents)}}
             count = len(self.collection.get(where=where, include=[])["ids"])

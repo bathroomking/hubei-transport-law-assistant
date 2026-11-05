@@ -3,10 +3,11 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from transport_law.discretion import DiscretionService
 from transport_law.main import create_app
+from transport_law.retrieval import BM25Retriever
 from transport_law.schemas import CaseFacts
 
 
@@ -36,23 +37,40 @@ def test_api_smoke_validation_and_missing_key(settings):
         assert health["chunk_count"] == 1336
         assert health["pending_verification_count"] == 1336
         assert health["llm_configured"] is False
+        assert health["retrieval_backend"] == "hybrid"
+        assert health["online_only"] is True
         assert client.get("/docs").status_code == 200
-        hits = client.post("/api/v1/retrieve", json={"question": "路边挖沟有哪些依据？"}).json()[
-            "hits"
-        ]
+        hits = BM25Retriever(client.app.state.runtime.repository).search("路边挖沟有哪些依据？")
         assert len(hits) == 5
-        article = client.get("/api/v1/articles/" + hits[0]["chunk"]["id"])
+        article = client.get("/api/v1/articles/" + hits[0].chunk.id)
         assert article.status_code == 200
         assert client.get("/api/v1/articles/unknown").status_code == 404
-        assert client.post("/api/v1/retrieve", json={"question": " "}).status_code == 422
-        answer = client.post("/api/v1/ask", json={"question": "明天武汉天气怎么样？"}).json()
-        assert answer["status"] == "insufficient_evidence"
-        missing_key = client.post("/api/v1/ask", json={"question": "公路挖沟如何处理？"})
-        assert missing_key.status_code == 503
-        assert missing_key.json()["error"]["code"] == "llm_not_configured"
+        assert client.post("/api/v1/ask", json={"question": " "}).status_code == 422
+        for question in ("明天武汉天气怎么样？", "公路挖沟如何处理？"):
+            missing_key = client.post("/api/v1/ask", json={"question": question})
+            assert missing_key.status_code == 503
+            assert missing_key.json()["error"]["code"] == "llm_not_configured"
         assert client.get("/api/v1/discretion/unknown").status_code == 404
-        check = client.post("/api/v1/discretion/check", json={"region": "湖北省"}).json()
-        assert check["status"] == "needs_facts"
+        for path in (
+            "/api/v1/retrieve",
+            "/api/v1/discretion/check",
+            "/api/v1/knowledge/ask",
+            "/api/v1/knowledge/retrieve",
+        ):
+            assert client.post(path, json={"question": "公路挖沟如何处理？"}).status_code == 404
+        assert client.get("/api/v1/knowledge/chunks/unknown").status_code == 404
+
+
+def test_online_ask_requires_embedding_key_before_retrieval(settings):
+    class NeverRetrieve:
+        def search(self, *args, **kwargs):
+            pytest.fail("在线配置不完整时不得开始检索")
+
+    configured = settings.model_copy(update={"deepseek_api_key": SecretStr("offline-test-key")})
+    with TestClient(create_app(configured, retriever=NeverRetrieve())) as client:
+        response = client.post("/api/v1/ask", json={"question": "公路挖沟如何处理？"})
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "embedding_not_configured"
 
 
 def test_service_restart_and_retrieval_do_not_load_chunking_dependencies(settings, monkeypatch):
@@ -69,9 +87,12 @@ def test_service_restart_and_retrieval_do_not_load_chunking_dependencies(setting
     for _ in range(2):
         with TestClient(create_app(settings)) as client:
             assert client.get("/health").json()["status"] == "ok"
-            response = client.post("/api/v1/retrieve", json={"question": "公路法第四十四条"})
+            hits = BM25Retriever(client.app.state.runtime.repository).search("公路法第四十四条")
+            assert hits
+            response = client.get("/api/v1/articles/" + hits[0].chunk.id)
             assert response.status_code == 200
-            results.append(response.json()["hits"])
+            assert response.json() == hits[0].chunk.model_dump(mode="json")
+            results.append(hits)
     assert results[0] and results[0] == results[1]
 
 

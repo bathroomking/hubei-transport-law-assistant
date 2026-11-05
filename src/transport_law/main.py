@@ -7,48 +7,37 @@ from fastapi.staticfiles import StaticFiles
 
 from transport_law import __version__
 from transport_law.config import Settings
+from transport_law.documents import LawDocument, load_law_document
 from transport_law.errors import AppError
 from transport_law.knowledge_api import router as knowledge_router
 from transport_law.llm import LanguageModel
+from transport_law.retrieval import Retriever
 from transport_law.runtime import build_runtime
 from transport_law.schemas import (
     AnswerResponse,
-    CaseFacts,
-    DiscretionCheck,
-    DiscretionRuleSet,
     LegalChunk,
     SearchRequest,
-    SearchResponse,
 )
 
 
-def create_app(settings: Settings | None = None, llm: LanguageModel | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    llm: LanguageModel | None = None,
+    *,
+    retriever: Retriever | None = None,
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.runtime = build_runtime(settings, llm)
-        from transport_law.knowledge import KnowledgeStore
-        from transport_law.service import LawService
-
-        runtime = app.state.runtime
-        app.state.knowledge = KnowledgeStore(
-            runtime.settings,
-            reserved_filenames=[chunk.source.file for chunk in runtime.repository.searchable],
-        )
-        app.state.knowledge_service = LawService(
-            app.state.knowledge,
-            app.state.knowledge,
-            runtime.service.llm,
-            top_k=runtime.settings.retrieval_top_k,
-        )
+        app.state.runtime = build_runtime(settings, llm, retriever=retriever)
+        app.state.knowledge = app.state.runtime.knowledge
         yield
 
     app = FastAPI(
         title="湖北交通运输法规与裁量助手",
         version=__version__,
         description=(
-            "学习原型：检索上传材料、返回原文与页码、收集裁量事实。"
-            "目前覆盖普通公路‘擅自占用、挖掘公路’一个事项。"
-            "问答接口在命中资料后调用 DeepSeek；文件效力及个案适用尚未核验。"
+            "在线交通法规与裁量问答：白话提问，混合检索正式法规和已入库上传资料，"
+            "由 DeepSeek 根据原文回答并提供出处。文件效力及个案适用尚未核验。"
         ),
         lifespan=lifespan,
     )
@@ -73,6 +62,7 @@ def create_app(settings: Settings | None = None, llm: LanguageModel | None = Non
         chunks = runtime.repository.searchable
         return {
             "status": "ok",
+            "online_only": True,
             "version": __version__,
             "chunk_count": len(chunks),
             "item_count": len({chunk.item_id for chunk in chunks}),
@@ -89,30 +79,17 @@ def create_app(settings: Settings | None = None, llm: LanguageModel | None = Non
             "embedding_connectivity": "not_checked",
         }
 
-    @app.post("/api/v1/retrieve", response_model=SearchResponse, tags=["法规检索"])
-    def retrieve(payload: SearchRequest, request: Request):
-        return request.app.state.runtime.service.retrieve(payload)
-
-    @app.get("/api/v1/articles/{chunk_id}", response_model=LegalChunk, tags=["法规检索"])
+    @app.get("/api/v1/articles/{chunk_id}", response_model=LegalChunk, tags=["出处原文"])
     def get_article(chunk_id: str, request: Request):
         return request.app.state.runtime.repository.get_article(chunk_id)
 
-    @app.post("/api/v1/ask", response_model=AnswerResponse, tags=["带依据问答"])
+    @app.get("/api/v1/documents/{document_id}", response_model=LawDocument, tags=["出处原文"])
+    def get_document(document_id: str, request: Request, version_id: str | None = None):
+        return load_law_document(request.app.state.runtime.repository, document_id, version_id)
+
+    @app.post("/api/v1/ask", response_model=AnswerResponse, tags=["在线问答"])
     async def ask(payload: SearchRequest, request: Request):
         return await request.app.state.runtime.service.ask(payload)
-
-    @app.get("/api/v1/discretion/{item_id}", response_model=DiscretionRuleSet, tags=["裁量辅助"])
-    def get_rules(item_id: str, request: Request):
-        return request.app.state.runtime.discretion.get_discretion_rules(item_id)
-
-    @app.post(
-        "/api/v1/discretion/check",
-        response_model=DiscretionCheck,
-        tags=["裁量辅助"],
-        summary="检查缺失事实和复核事项（首版不计算罚款）",
-    )
-    def check_facts(payload: CaseFacts, request: Request):
-        return request.app.state.runtime.discretion.evaluate_rules(payload)
 
     return app
 

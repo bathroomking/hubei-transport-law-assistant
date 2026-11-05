@@ -486,15 +486,10 @@ class KnowledgeStore:
     def search(self, question: str, top_k: int = 5) -> list[SearchHit]:
         if not 1 <= top_k <= 10:
             raise ValueError("top_k 必须在 1 到 10 之间")
-        ready = self._ready()
-        if not ready:
+        chunks = self.ready_chunks()
+        if not chunks:
             return []
-        document_ids = {row["id"] for row in ready}
-        # 固定本次查询的 ready 快照；下一次请求即能看到刚完成的新文档。
-        chunks = [chunk for chunk in self.searchable if chunk.document_id in document_ids]
-        count = sum(row["chunk_count"] for row in ready)
-        if len(chunks) != count:
-            raise AppError("vector_index_incomplete", "上传资料正文缺失，请检查本地索引。", 503)
+        document_ids = {chunk.document_id for chunk in chunks}
         bm25 = BM25Retriever(LawRepository(chunks))
         explicit = bm25.explicit_chunks(question)
         if explicit:
@@ -511,7 +506,6 @@ class KnowledgeStore:
             return dense()
         from transport_law.hybrid import fuse_rankers
 
-        # 通用上传资料尚无可靠的法规/事项标签，因此两路都搜索全部 ready 片段。
         return fuse_rankers(
             lambda: bm25.rank_candidates(question, chunks, limit=limit),
             dense,
@@ -519,8 +513,27 @@ class KnowledgeStore:
             rrf_k=self.settings.hybrid_rrf_k,
         )
 
+    def ready_chunks(self) -> list[LegalChunk]:
+        """每次请求固定 ready 快照；刚完成的文档从下一次请求起可见。"""
+        ready = self._ready()
+        if not ready:
+            return []
+        document_ids = {row["id"] for row in ready}
+        # 固定本次查询的 ready 快照；下一次请求即能看到刚完成的新文档。
+        chunks = [chunk for chunk in self.searchable if chunk.document_id in document_ids]
+        count = sum(row["chunk_count"] for row in ready)
+        if len(chunks) != count:
+            raise AppError("vector_index_incomplete", "上传资料正文缺失，请检查本地索引。", 503)
+        return chunks
+
     def _rank_vectors(
-        self, question: str, chunks: list[LegalChunk], document_ids: set[str], *, limit: int
+        self,
+        question: str,
+        chunks: list[LegalChunk],
+        document_ids: set[str],
+        *,
+        limit: int,
+        query_vector: list[float] | None = None,
     ) -> list[SearchHit]:
         by_id = {chunk.id: chunk for chunk in chunks}
         with chroma_errors():
@@ -528,7 +541,9 @@ class KnowledgeStore:
             where = {"document_id": {"$in": sorted(document_ids)}}
             if set(collection.get(where=where, include=[])["ids"]) != set(by_id):
                 raise AppError("vector_index_incomplete", "上传资料向量缺失，请检查本地索引。", 503)
-            vector = self.embedder.embed_query(question)
+            vector = (
+                query_vector if query_vector is not None else self.embedder.embed_query(question)
+            )
             result = collection.query(
                 query_embeddings=[vector],
                 n_results=min(limit, len(chunks)),

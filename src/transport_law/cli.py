@@ -7,13 +7,14 @@ from pathlib import Path
 from pydantic import BaseModel, ValidationError
 
 from transport_law.config import PROJECT_ROOT, Settings
+from transport_law.discretion import DiscretionService
 from transport_law.errors import AppError
 from transport_law.evaluation import evaluate_retrieval
 from transport_law.ingest import extract_pdf
-from transport_law.llm import DeepSeekClient
 from transport_law.repository import LawRepository
+from transport_law.retrieval import BM25Retriever
 from transport_law.runtime import build_runtime
-from transport_law.schemas import CaseFacts, SearchRequest
+from transport_law.schemas import SearchRequest
 
 
 def print_json(value):
@@ -26,16 +27,9 @@ def print_json(value):
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="湖北交通运输法规与裁量助手")
     commands = root.add_subparsers(dest="command", required=True)
-    for name, help_text in (
-        ("retrieve", "检索原文；BM25 离线，Chroma / hybrid 会调用在线向量模型"),
-        ("ask", "检索并调用 DeepSeek 生成有引用的解释"),
-        ("chat", "单独检查 DeepSeek 模型连接，会使用 API 额度"),
-    ):
-        command = commands.add_parser(name, help=help_text)
-        command.add_argument("question")
-        if name != "chat":
-            command.add_argument("--top-k", type=int, default=None)
-            command.add_argument("--backend", choices=["bm25", "chroma", "hybrid"])
+    ask = commands.add_parser("ask", help="在线检索已收录资料并生成有出处的白话解释")
+    ask.add_argument("question")
+    ask.add_argument("--top-k", type=int, default=None)
     serve = commands.add_parser("serve", help="启动本地前端、API 和 /docs")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
@@ -61,9 +55,7 @@ def parser() -> argparse.ArgumentParser:
         "evaluate", help="运行检索回归集；Chroma / hybrid 会调用向量模型"
     )
     evaluate.add_argument("--dataset", type=Path, default=PROJECT_ROOT / "evals/retrieval.jsonl")
-    evaluate.add_argument("--backend", choices=["bm25", "chroma", "hybrid"])
-    facts = commands.add_parser("check-facts", help="读取案件 JSON，检查缺失事实和规则核验状态")
-    facts.add_argument("path", type=Path)
+    evaluate.add_argument("--backend", choices=["bm25", "chroma", "hybrid"], default="bm25")
     return root
 
 
@@ -91,8 +83,6 @@ def run(args) -> int:
         )
         return 0
     settings = Settings()
-    if getattr(args, "backend", None):
-        settings = settings.model_copy(update={"retrieval_backend": args.backend})
     if args.command in ("index-vectors", "vector-status"):
         from transport_law.vector_store import build_vector_index, open_vector_index
 
@@ -121,41 +111,38 @@ def run(args) -> int:
                 }
             )
         return 0
-    if args.command == "chat":
-        question = SearchRequest(question=args.question).question
-        completion = asyncio.run(
-            DeepSeekClient(settings).complete(
-                [{"role": "user", "content": question}], json_mode=False
-            )
-        )
-        print_json({"answer": completion.content, "model": completion.model})
-        return 0
-    if args.command in ("validate-data", "check-facts"):
-        # 资料/规则检查与向量库和在线 Key 无关。
-        settings = settings.model_copy(update={"retrieval_backend": "bm25"})
-    runtime = build_runtime(settings)
-    if args.command in ("ask", "retrieve"):
-        request = SearchRequest(question=args.question, top_k=args.top_k)
-        if args.command == "ask":
-            print_json(asyncio.run(runtime.service.ask(request)))
-        else:
-            print_json(runtime.service.retrieve(request))
-    elif args.command == "validate-data":
+    if args.command == "validate-data":
+        # 维护检查只读取本地资料和规则，不初始化在线问答运行时。
+        repository = LawRepository.from_jsonl(settings.law_data_path)
+        discretion = DiscretionService(settings.discretion_data_path, repository)
         print_json(
             {
                 "status": "ok",
-                "chunks": len(runtime.repository.searchable),
-                "rule_status": runtime.discretion.rule_set.review_status,
+                "chunks": len(repository.searchable),
+                "rule_status": discretion.rule_set.review_status,
             }
         )
-    elif args.command == "evaluate":
-        report = evaluate_retrieval(args.dataset, runtime.service.retriever)
-        report["backend"] = settings.retrieval_backend
+        return 0
+    if args.command == "evaluate":
+        repository = LawRepository.from_jsonl(settings.law_data_path)
+        if args.backend == "hybrid":
+            from transport_law.hybrid import HybridRetriever
+
+            retriever = HybridRetriever(repository, settings)
+        elif args.backend == "chroma":
+            from transport_law.vector_store import ChromaRetriever
+
+            retriever = ChromaRetriever(repository, settings)
+        else:
+            retriever = BM25Retriever(repository)
+        report = evaluate_retrieval(args.dataset, retriever)
+        report["backend"] = args.backend
         print_json(report)
         return 0 if report["passed"] == report["total"] else 1
-    elif args.command == "check-facts":
-        facts = CaseFacts.model_validate_json(args.path.read_text(encoding="utf-8"))
-        print_json(runtime.discretion.evaluate_rules(facts))
+    if args.command == "ask":
+        request = SearchRequest(question=args.question, top_k=args.top_k)
+        runtime = build_runtime(settings)
+        print_json(asyncio.run(runtime.service.ask(request)))
     return 0
 
 

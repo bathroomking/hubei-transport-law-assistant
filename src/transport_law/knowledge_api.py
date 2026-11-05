@@ -5,8 +5,6 @@ from typing import Literal
 from fastapi import APIRouter, BackgroundTasks, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from transport_law.schemas import AnswerResponse, LegalChunk, SearchRequest, SearchResponse
-
 router = APIRouter(prefix="/api/v1/knowledge", tags=["上传知识库"])
 
 
@@ -52,18 +50,3 @@ def retry_document(document_id: str, request: Request, background_tasks: Backgro
     result = store.retry(document_id)
     background_tasks.add_task(store.process, document_id)
     return result
-
-
-@router.post("/retrieve", response_model=SearchResponse)
-def retrieve(payload: SearchRequest, request: Request):
-    return request.app.state.knowledge_service.retrieve(payload)
-
-
-@router.get("/chunks/{chunk_id}", response_model=LegalChunk)
-def get_chunk(chunk_id: str, request: Request):
-    return request.app.state.knowledge.get_article(chunk_id)
-
-
-@router.post("/ask", response_model=AnswerResponse)
-async def ask(payload: SearchRequest, request: Request):
-    return await request.app.state.knowledge_service.ask(payload)

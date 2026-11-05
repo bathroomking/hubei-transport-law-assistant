@@ -1,47 +1,20 @@
 # 湖北交通运输法规与裁量助手
 
-围绕湖北交通执法学习 RAG 和智能体开发的 Python 项目。已收录 16 部法规、规章的 1,280 条正文，以及湖北公安裁量总则 22 条、交通管理册 29 项，连同原裁量资料共 1,336 条；配置 DeepSeek 后可生成带引用的解释。裁量事实检查仍限普通公路“擅自占用、挖掘公路”。资料目录及全文见 [湖北交通法律法规资料库](docs/legal-sources.md)。
+用自己的话描述交通法规问题，在线获得带出处的解释、需要补充的信息，并查看引用条文和已收录法规原文。法规查找、带依据问答和裁量参考共用一个入口，不需要先选择功能或填写案件事实表单。
 
-当前技术栈：**Python 3.11+（本地验证为 3.12）＋ FastAPI ＋ HTTPX/DeepSeek ＋ JSONL ＋ 本地 BM25**，可选 **LangChain Text Splitters** 自动分块，以及 **阿里云百炼 text-embedding-v4 ＋ ChromaDB** 向量检索，支持 **BM25 + 向量 + RRF** 混合检索。检索、数据、模型调用和规则检查分层。
+业务问答固定使用 **BM25 + 阿里云百炼向量检索 + RRF 融合 + DeepSeek**。正式法规与已完成入库的上传资料共同参与检索；BM25 保留为混合检索的一部分及维护评测基线，不提供独立的离线问答或离线检索入口。资料目录见 [湖北交通法律法规资料库](docs/legal-sources.md)。
 
-## 当前能做什么
+当前技术栈为 Python 3.11+、FastAPI、HTTPX、LangChain Core / Text Splitters、JSONL 和 ChromaDB。前端使用原生 HTML / CSS / JavaScript，由同一个 Python 服务提供。
 
-| 能力 | 当前实现 |
-| --- | --- |
-| 法规资料 | 交通运输与公安交管共 17 份整理文档；法规、规章全文 1,280 条，公安裁量总则 22 条及交通册 29 项，另保留原上传 5 条记录；有来源快照和版本说明 |
-| 独立检索 | 中文 BM25、事项别名、法规名称与条号定位；完整法条优先于重复节选，区分国家和湖北的同名法规 |
-| 向量检索 | 可选 百炼 text-embedding-v4 在线向量化，Chroma 本地持久化；分批入库、重复跳过、断点续传、子块回填父法条 |
-| 混合检索 | BM25 与向量并行召回，按父法条去重后用 RRF 融合；记录两路排名，保留精确条号和出处约束 |
-| RAG 问答 | 排名原文 → PromptTemplate / stuff → DeepSeek 回答或资料不足 → 引用校验；返回实际引用和全部检索原文 |
-| 模型错误处理 | 缺 Key、认证失败、余额不足、限流、网络失败、总超时、空回复、截断、非法 JSON |
-| 裁量辅助 | 结构化事实输入、缺失字段追问、地域/道路类型检查、边界复核提醒 |
-| 数据整理 | PDF 逐页提取；LangChain 自动对 PDF/TXT/MD 分块，保存文件 SHA-256、来源位置及待审核状态 |
-| 文档上传 | PDF/TXT/Markdown 上传 API；同名拒绝，后台切分和 embedding，Chroma 增量入库、状态查询与失败续传；上传库独立检索和问答 |
-| 使用入口 | 本地中文前端、命令行、HTTP API、可操作的 `/docs` 页面 |
-| 回归评测 | 离线测试、20 条原事项/扩充范围题、20 条法规定位题和 30 条公安交管检索题 |
-
-**资料效力和个案适用尚未核验，裁量规则为草稿。**当前规则模块不自动匹配罚款档次、不计算具体罚款；RAG 提示词也要求只解释材料。引用 ID 校验只能保证来源来自本次检索，不能证明模型的每一句解释都得到原文充分支持。
-
-## 1. 安装与离线体验
+## 1. 安装和配置
 
 在项目根目录运行（macOS / Linux）：
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[dev,pdf]" -c constraints.txt
-
-python -m transport_law validate-data
-python -m transport_law retrieve "在公路上挖沟，需要查哪些依据？"
-python -m transport_law retrieve "湖北省公路路政管理条例第12条"
-python -m transport_law retrieve "行政处罚法第33条"
-python -m transport_law retrieve "超速多少罚款？"
-python -m transport_law retrieve "车辆变更车道与后车发生剐蹭"
-python -m transport_law retrieve "道路交通事故处理程序规定第60条"
-python -m transport_law check-facts evals/case_missing_facts.json
+python -m pip install -e ".[dev,ingest,vectors]" -c constraints.txt
 ```
-
-第一条检索应返回 5 条依据；“超速”和“变更车道”可检索新增交管条文，但不表示已完成个案适用或事故认定。事实检查示例仍只处理公路开挖事项，会返回缺失字段和边界复核提醒。默认 `RETRIEVAL_BACKEND=bm25` 时以上命令全部离线，不需要 API Key。
 
 Windows PowerShell 的前两步改为：
 
@@ -50,225 +23,173 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-本地已经创建了 `.venv` 时，只需激活后继续使用。PyCharm 中选择项目目录下的 `.venv/bin/python`（Windows 为 `.venv\Scripts\python.exe`）作为解释器。运行配置可使用模块 `transport_law`，参数 `serve --reload`，工作目录为项目根目录。
-
-`constraints.txt` 记录本次验证的依赖版本。这里只支持在源码仓库中以 editable 方式安装，运行依赖项目的 `data/` 目录；尚未制作包含数据的独立分发包。
-
-## 2. 接入 DeepSeek
-
-首次使用时复制 `.env.example` 为 `.env`；如果 `.env` 已存在，直接编辑它，不覆盖已有配置。`.env.example` 保留为空密钥的配置模板，实际运行读取本地 `.env`。
+首次使用时复制 `.env.example` 为 `.env`；已有 `.env` 时直接编辑，不覆盖原配置。在线问答需要分别配置百炼和 DeepSeek 的密钥：
 
 ```dotenv
-DEEPSEEK_API_KEY=在本地填写你的真实Key
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-flash
+DASHSCOPE_API_KEY=在本地填写百炼密钥
+DEEPSEEK_API_KEY=在本地填写DeepSeek密钥
+RETRIEVAL_BACKEND=hybrid
+KNOWLEDGE_RETRIEVAL_BACKEND=hybrid
 ```
 
-密钥只放本地，`.gitignore` 已忽略 `.env`。修改 `.env` 后需要重启已运行的服务。配置模型后分别验证两个层次：
+完整的地址、模型和超时配置见 [.env.example](.env.example)。真实密钥只放本地 `.env`，该文件已被 Git 忽略；修改配置后重启服务。前端不会收到模型密钥。
+
+普通自然语言问答会把问题发往百炼生成查询向量，再将问题与本次检索原文发送给 DeepSeek；精确条目 ID 可跳过问题向量生成，但仍需两种密钥配置并调用 DeepSeek。这些请求会使用对应服务的额度。缺少配置、索引不可用或在线调用失败时会明确报错，不退回离线问答。没有检索到依据时返回资料不足，不调用回答模型。
+
+`constraints.txt` 记录验证过的依赖版本。当前以源码仓库的 editable 安装方式运行，依赖项目内的 `data/` 目录；尚未提供包含法规数据的独立分发包。PyCharm 解释器可选择 `.venv/bin/python`，模块为 `transport_law`，启动参数为 `serve --reload`，工作目录设为项目根目录。
+
+## 2. 准备法规向量索引
+
+已有可用索引时不必重复入库。首次部署或整理后的资料发生变化时，先生成包含父条目出处的分块，再预检和入库：
 
 ```bash
-# 只检查模型连接
-python -m transport_law chat "请用一句话解释 RAG。"
-
-# 检索 + 模型解释 + 引用校验
-python -m transport_law ask "没办手续就在公路上挖沟，材料里有哪些依据，需要补充什么信息？"
-```
-
-`chat` 和命中资料后的 `ask` 会向配置的 DeepSeek 服务发送输入，并使用 API 额度；RAG 同时发送本次检索到的资料。没有命中资料时直接返回 `insufficient_evidence`，不调用回答模型。密钥非空只表示已配置，实际连通性以测试结果为准。
-
-问答通过 LangChain Core `PromptTemplate` 一次传入已排序的原文和问题；有命中但原文不够回答时，也支持模型明确返回资料不足。完整流程、提示词与真实调用验证见 [最终问答链](docs/qa-chain.md)。
-
-模型接口和默认名称依据 2026-11-02 查阅的 [DeepSeek Chat Completions 文档](https://api-docs.deepseek.com/api/create-chat-completion/)；JSON 参数和空白回复处理依据 [DeepSeek JSON Output 文档](https://api-docs.deepseek.com/guides/json_mode/)。代码直接用 HTTPX 调用 DeepSeek，不需要 OpenAI 账户。初版显式关闭 thinking，所有输出仍做本地结构校验。
-
-成功问答中的关键字段：
-
-| 字段 | 含义 |
-| --- | --- |
-| `answer` | 各条解释拼成的正文 |
-| `claims[].citation_ids` | 每条解释与依据条目的对应关系 |
-| `sources` | 后端回填真实原文、版本和出处；PDF 使用 `pdf_page`，官网正文使用 `official_url` 和 `locator` 条号 |
-| `source_documents` | 全部本次检索原文，保持排名；包括未被答案引用的候选，也在资料不足时返回 |
-| `follow_up_questions` | 模型提出的补充问题 |
-| `applicability_status` | 当前固定为 `not_verified` |
-| `model` / `usage` | 实际响应的模型名称和可用的 token 用量 |
-
-### 可选：接入阿里云百炼与 ChromaDB
-
-安装 `.[vectors]` 后，在本地 `.env` 中补充 `DASHSCOPE_API_KEY`。先预检已有分块，再分批向量化入库：
-
-```bash
-python -m pip install -e ".[vectors]" -c constraints.txt
+python scripts/chunk_legal_corpus.py --output-dir data/staging/current_document_batch
 python -m transport_law index-vectors \
-  --documents data/staging/document_batch_20261104/langchain_documents.jsonl --dry-run
+  --documents data/staging/current_document_batch/langchain_documents.jsonl --dry-run
 python -m transport_law index-vectors \
-  --documents data/staging/document_batch_20261104/langchain_documents.jsonl
+  --documents data/staging/current_document_batch/langchain_documents.jsonl
 python -m transport_law vector-status
-python -m transport_law retrieve "公路挖沟有哪些依据？" --backend chroma
-python -m transport_law retrieve "公路挖沟有哪些依据？" --backend hybrid
 ```
 
-`--dry-run` 不需要密钥、不写数据库。正式入库和 Chroma 语义查询会调用阿里云百炼 并使用额度；不调用 DeepSeek。已有批次含 1,338 个子块，对应 1,336 个父记录。数据库默认保存在 Git 忽略的 `data/local/chroma/`。命令不会自动修改 `.env` 或切换默认检索。
+`--dry-run` 只检查输入，不写数据库或调用在线模型。正式入库调用百炼，支持分批处理、重复跳过和断点续传。数据库默认位于 Git 忽略的 `data/local/chroma/`。启动服务不会重新分块或生成已有文档的向量；语义查询只生成问题向量，精确 ID 定位可跳过该步骤。
 
-入库完成后，可在 `.env` 设置 `RETRIEVAL_BACKEND=hybrid`（BM25 + 向量 + RRF）或 `chroma`（纯向量）并重启服务；`--backend bm25` 可单次使用原基线。两路使用相同的法规名称、条号和事项范围约束。现有 70 题实测 BM25 通过 70、Chroma 通过 65、混合通过 68，因此正式法规默认保留 BM25。配置与结果见 [混合检索说明](docs/hybrid-retrieval.md)，入库、续传和模型更换见 [向量检索说明](docs/vector-retrieval.md)。
+索引维护和模型更换见 [向量检索说明](docs/vector-retrieval.md)。该文档中的历史算法对比用于维护评估；当前用户问答固定使用 hybrid。
 
-## 3. 启动前端与接口
+## 3. 直接提问
 
 ```bash
 python -m transport_law serve --reload
 ```
 
-打开 [前端工作台](http://127.0.0.1:8000/)，即可直接使用以下功能：
+打开 [问答页面](http://127.0.0.1:8000/)，直接输入，例如：
 
-- **法规检索**：输入问题或选择示例，查看相关原文；点击“查看完整条目”核对来源、页码、版本和核验记录。
-- **带依据问答**：检索后调用 DeepSeek 生成解释，点击引用编号查看原文。缺少密钥、模型调用失败或依据不足时，页面会显示对应提示。
-- **裁量辅助**：填写已知案件事实，检查缺失字段和复核事项；可以载入示例、查看三档规则草稿及其关联依据。
-- **服务状态**：查看已收录条目、覆盖事项、待核验数量和模型配置状态，可手动刷新。
+> 在湖北一段普通公路上，施工队没办许可就挖沟埋管。这种情况该怎么处理，有什么依据？
 
-前端使用原生 HTML / CSS / JavaScript，由 FastAPI 同源提供，无需 Node.js、前端依赖安装或额外启动命令。支持窄屏布局，检索与问答可用 `Ctrl / ⌘ + Enter` 提交。表单与结果仅保留在当前页面内存中，刷新即清除；问答不共享多轮上下文。
+页面只有一个问题输入区，支持示例填入和 `Ctrl / ⌘ + Enter` 发送。回答会列出引用依据；点击引用编号可查看条文详情，引用卡展示原文、官方链接或 PDF 页码。“查看已收录原文”打开同一文档、同一版本的收录内容。
 
-“相关许可”的“否”表示明确没有许可，“未提供 / 待核实”表示信息缺失。未填事实不会自动推断。规则草稿只展示材料原文，不自动选档或计算罚款。
+每次提问独立处理，没有多轮记忆。回答要求补充情况时，请在原问题里保留背景、添加新信息后再次发送。输入和结果只保留在当前页面，刷新即清除。请求期间可以取消等待；这不保证已发送的上游请求停止执行或计费。
 
-开发调试仍可打开 [接口文档](http://127.0.0.1:8000/docs)，选择接口 → **Try it out** → 输入 JSON → **Execute**。
+命令行使用同一条在线问答链：
 
-| 接口 | 用途 | 需要 Key |
-| --- | --- | --- |
-| `GET /health` | 数据数量和本地配置状态 | 否 |
-| `POST /api/v1/retrieve` | 原文检索 | BM25 不需要；Chroma / hybrid 语义查询需要百炼 API Key |
-| `GET /api/v1/articles/{chunk_id}` | 读取一条完整记录 | 否 |
-| `POST /api/v1/ask` | 带引用解释 | 命中资料后需要 DeepSeek Key；Chroma / hybrid 查询还需要百炼 API Key |
-| `GET /api/v1/discretion/{item_id}` | 查看裁量规则草稿 | 否 |
-| `POST /api/v1/discretion/check` | 缺失事实和复核事项检查 | 否 |
-| `POST /api/v1/knowledge/documents` | 上传 PDF/TXT/Markdown；后台切分并写入上传知识库 | 百炼 API Key |
-| `GET /api/v1/knowledge/documents` / `GET /api/v1/knowledge/documents/{id}` | 上传列表与处理进度、错误 | 否 |
-| `POST /api/v1/knowledge/documents/{id}/retry` | 继续失败或中断的上传入库任务 | 缺失向量需百炼 API Key |
-| `POST /api/v1/knowledge/retrieve` | 检索已完成的上传文档 | 百炼 API Key |
-| `GET /api/v1/knowledge/chunks/{chunk_id}` | 读取上传文档片段及来源 | 否 |
-| `POST /api/v1/knowledge/ask` | 基于上传文档生成带引用解释 | 百炼及 DeepSeek API Key |
-
-上传接口在 `/docs` 中使用文件选择器，字段名为 `file`，支持 `.pdf`、`.txt`、`.md`、`.markdown`，默认最大 20 MiB。同名文件返回 `409`；上传返回 `202` 后查询状态，只有 `ready` 才可以检索。上传库使用独立 collection，不重新生成现有法规向量，当前网页工作台仍检索已整理法规。安装依赖、curl 示例和持久化规则见 [上传知识库说明](docs/knowledge-upload.md)。
-
-检索/问答输入示例：
-
-```json
-{"question": "在路边挖了条沟，相关材料如何规定？", "top_k": 5}
+```bash
+python -m transport_law ask "根据公路法第四十四条，占用、挖掘公路需要履行哪些手续？"
 ```
 
-裁量事实输入示例：
+面向使用者的 CLI 入口为 `ask` 和 `serve`。不再提供独立的 `retrieve`、`chat` 或结构化 `check-facts` 入口。算法比较、资料校验和入库命令仍供维护使用。
+
+### 看清资料收录范围
+
+“引用条文原文”与“整部法规全文”是不同范围。文档接口明确返回以下覆盖类型，页面按实际类型显示：
+
+| `coverage` | 表示的范围 |
+| --- | --- |
+| `full_text` | 已收录该版本的整部法规正文 |
+| `selected_sections` | 仅收录选定章节或部分材料，例如裁量总则及交通管理册 |
+| `excerpts` | 仅收录节选条目 |
+| `uploaded_document` | 已处理的上传文档内容，不据此宣称是完整或有效法规 |
+
+`coverage_note` 解释具体收录边界；无法确认全文时不能标为 `full_text`。全文收录也不等于已确认现行有效或适用于个案。原始来源、版本、转录核对和效力核验应分别检查。
+
+## 4. API 与上传资料管理
+
+开发调试可打开 [接口文档](http://127.0.0.1:8000/docs)。业务提问只使用 `POST /api/v1/ask`；前端不暴露检索数量、后端算法或模型参数。
+
+| 接口 | 用途 |
+| --- | --- |
+| `POST /api/v1/ask` | 在线检索、回答、补问及引用；需要百炼和 DeepSeek 配置 |
+| `GET /api/v1/articles/{chunk_id}` | 读取正式法规或上传资料中的引用原文与来源 |
+| `GET /api/v1/documents/{document_id}?version_id=...` | 读取指定版本的全部已收录内容及覆盖范围 |
+| `GET /health` | 查看服务、数据和配置状态，不调用模型 |
+| `POST /api/v1/knowledge/documents` | 上传 PDF/TXT/Markdown，后台切分并写入上传库 |
+| `GET /api/v1/knowledge/documents` | 上传资料列表 |
+| `GET /api/v1/knowledge/documents/{id}` | 处理进度或错误 |
+| `POST /api/v1/knowledge/documents/{id}/retry` | 继续失败或中断的入库任务 |
+
+问答请求示例：
 
 ```json
-{
-  "item_id": "road_occupation_excavation",
-  "region": "湖北省",
-  "location": "待核实的市县和路段",
-  "occurred_on": "2026-10-01",
-  "road_type": "ordinary_highway",
-  "behavior": "excavation",
-  "has_permission": false,
-  "area_m2": "20",
-  "facts_verified": false
-}
+{"question": "在湖北普通公路上未经许可挖沟，需要核实什么，有哪些依据？"}
 ```
 
-不知道的字段可以省略，不应猜测。`false` 表示明确陈述没有许可，与未填写不同。即使字段填齐，草稿规则仍返回 `needs_review`。`facts_verified` 仅为调用方声明，没有身份或审批效力。
+| 问答响应字段 | 含义 |
+| --- | --- |
+| `status` / `answer` | 回答或资料不足状态，以及解释正文 |
+| `claims[].text` / `citation_ids` | 每条解释及其引用条目 ID |
+| `sources` | 回答实际引用的真实原文、版本与出处 |
+| `source_documents` | 全部本次检索原文，包含未被回答引用的候选 |
+| `follow_up_questions` | 需要补充或核实的信息 |
+| `notice` / `applicability_status` | 使用边界；个案适用固定为 `not_verified` |
+| `model` / `usage` | 实际响应的模型名称和可用的 Token 用量 |
 
-`/health` 的 `llm_configured` 只表示 Key 非空，连通性用 `chat` 检查。服务默认监听 `127.0.0.1`，适合本机开发；当前没有用户鉴权和多用户隔离，尚未部署为公共服务。
+文档响应包含 `document_id`、`version_id`、`title`、`coverage`、`coverage_note` 和 `articles`。全文展示使用保存的全部对应条目，不让模型生成或补写法规正文。PDF 来源保留真实 `pdf_page`，官网正文使用 `official_url` 与 `locator`，不为网页编造页码。
 
-## 4. 理解目录和流程
+上传接口字段名为 `file`，支持 `.pdf`、`.txt`、`.md`、`.markdown`，默认最大 20 MiB。同名文件返回 `409`，接受任务后返回 `202`；状态为 `ready` 的资料才参与统一问答。上传库使用独立 collection，不重新生成已有正式法规向量，来源仍保留待核验标记。管理和持久化细节见 [上传知识库说明](docs/knowledge-upload.md)；提问统一使用本节的 `/api/v1/ask`。
+
+`/health` 中密钥“已配置”只表示配置存在，不能证明模型实际连通。服务默认监听 `127.0.0.1`，当前没有用户鉴权和多用户隔离，适合本机使用。
+
+## 5. 开发与维护
 
 ```text
 src/transport_law/
-  config.py        .env 与路径配置
-  schemas.py       条目、来源、问答、案件事实的数据结构
-  repository.py    JSONL 加载、校验、按 ID 读取原文
-  retrieval.py     事项召回与 BM25 排序（不调用模型）
-  embeddings.py    阿里云百炼 在线向量接口、校验和重试
-  vector_store.py  Chroma 持久化、断点续传与父法条回填
-  hybrid.py        BM25 与向量并行召回、RRF 排名融合
-  knowledge.py     上传登记、同名检查、后台分块入库及上传库检索
-  llm.py           DeepSeek HTTP 请求、超时和错误处理
-  prompts.py       有证据的解释提示词
-  qa.py            PromptTemplate 与 stuff 文档拼接、单次模型调用
-  service.py       RAG 流程与引用校验
-  discretion.py    裁量事实检查和草稿规则读取
-  ingest.py        PDF 逐页提取
-  chunking.py      LangChain 自动分块与来源位置记录（待审核草稿）
-  evaluation.py    检索回归评测
-  runtime.py       组装各模块
-  main.py          FastAPI 接口与前端静态资源入口
-  web/             中文前端（HTML、CSS、JavaScript，无构建依赖）
-  cli.py           命令行入口
+  config.py        配置与路径
+  schemas.py       条目、来源和问答的数据结构
+  documents.py     文档模型、按版本读取与收录覆盖校验
+  repository.py    正式条目校验与原文读取
+  retrieval.py     BM25、法规名称与条号约束
+  embeddings.py    百炼向量接口、校验与重试
+  vector_store.py  Chroma 持久化、续传与父法条回填
+  hybrid.py        RRF 融合及受限候选的维护评测检索器
+  online.py        双库全局 BM25/dense 排名、统一问答与密钥检查
+  knowledge.py     上传登记、后台分块入库与上传资料检索
+  llm.py           DeepSeek 请求、超时和错误处理
+  prompts.py       解释、引用与缺失信息的提示词
+  qa.py            PromptTemplate 与原文拼接
+  service.py       问答流程、引用校验与可信来源回填
+  discretion.py    保留的内部事实检查与规则草稿模块
+  runtime.py       装配在线问答和维护所需组件
+  main.py          API 与前端静态资源
+  web/             单页问答，无前端构建依赖
+  cli.py           ask / serve 及维护命令
 data/
-  raw/             原始 PDF、官网法规快照与来源清单（laws/）
-  processed/       已整理的知识片段
+  raw/             来源 PDF、官网快照与来源清单
+  processed/       整理后的知识条目
   rules/           待核验的裁量规则
-  staging/         提取结果，默认不提交 Git
-  local/           本地 Chroma、上传原件、登记与处理缓存，不提交 Git
-evals/             检索题集、事实输入示例
-tests/             离线回归测试
-docs/              架构、数据整理和后续计划
+  staging/         分块等暂存产物，不提交 Git
+  local/           本地索引、上传原件与处理记录，不提交 Git
+evals/             检索回归题集
+tests/             单元与接口回归测试
+docs/              架构、来源、数据维护与验证记录
 ```
 
 ```mermaid
 flowchart LR
-  A[用户问题] --> B[范围约束 + BM25 / Chroma / 混合 RRF]
-  B --> C{有候选依据?}
-  C -- 否 --> D[返回依据不足]
-  C -- 是 --> E[DeepSeek 结构化解释]
-  E --> F[校验每条解释的引用 ID]
-  F --> G[从数据文件回填原文和页码]
-  H[结构化案件事实] --> I[缺失事实与规则核验检查]
-  I --> J[补问或返回需复核]
+  A[自然语言问题] --> B[正式法规 + ready 上传资料]
+  B --> C[BM25 + 在线向量 + RRF]
+  C --> D{有候选依据?}
+  D -- 否 --> E[说明资料不足]
+  D -- 是 --> F[DeepSeek 解释与补问]
+  F --> G[校验引用并回填可信原文]
+  G --> H[回答 + 引用条文 + 文档覆盖范围]
 ```
 
-建议阅读顺序：`schemas.py` → `repository.py` → `retrieval.py` → `llm.py` → `service.py` → `main.py`。详细设计见 [架构说明](docs/architecture.md)。
-
-## 5. 加入更多资料与验证
-
-希望上传文件后自动切分、生成向量并检索时，使用 [上传知识库 API](docs/knowledge-upload.md)。它支持按文档追加和失败续传；以下命令行流程用于单独生成候选分块及整理正式法规资料。
-
-自动分块需要安装可选的 `ingest` 组件。在项目根目录激活虚拟环境后运行：
+维护命令保留资料整理、校验、索引和回归评测。算法比较通过 `evaluate --backend` 进行，不改变在线问答的固定链路：
 
 ```bash
-python -m pip install -e ".[dev,ingest]" -c constraints.txt
-python -m transport_law chunk-document data/raw/P020250918567517504506.pdf \
-  --output data/staging/new_document_chunks.jsonl \
-  --document-id hubei-discretion-upload \
-  --title "湖北省交通运输常用行政处罚自由裁量基准" \
-  --chunk-size 800 --chunk-overlap 120
-```
-
-也支持 UTF-8 `.txt`、`.md` 文件。程序优先识别行首条文/章节/Markdown 标题，过长部分再递归切分；每块保存校验值、页内字符位置和待审核状态。参数单位是字符，重叠为目标值，不保证每一块都恰好重叠 120 字。分块在本机完成，不调用 DeepSeek。
-
-读取、条文整理和分块统一传递 LangChain `Document`，正文放在 `page_content`，来源与版本等放在 `metadata`；保存时转换为经过校验的 `DraftChunk`。**分块由命令行或上传任务触发，重启服务不会重新分块或生成已有文档向量。**复制新文件到目录不会自动触发导入。已整理法规的批量处理见 [自动分块说明](docs/chunking.md)，新文件自动入库见 [上传知识库说明](docs/knowledge-upload.md)。
-
-上述 `chunk-document` 命令输出 `DraftChunk` 草稿，**不会自动进入检索库**；上传 API 则会把片段写入独立上传库并保持待核验状态。裁量表仍需核对列关系与完整档次，扫描页需先 OCR。具体格式、使用示例和审核衔接见 [自动分块说明](docs/chunking.md)。
-
-已经整理入库的全部资料也可批量使用新流程处理：
-
-```bash
-python scripts/chunk_legal_corpus.py --output-dir data/staging/next_document_batch
-```
-
-批次会生成全量及按文档分组的 LangChain Document JSONL，完整保留父条目出处和修改依据；正式知识库保持独立。已完成批次与文件含义见 [批量处理说明](docs/chunking.md#批量处理已整理资料)。
-
-如只需要逐页提取，仍可使用原命令；整理完正式条目后运行检查：
-
-```bash
-python -m transport_law extract-pdf data/raw/P020250918567517504506.pdf \
-  --output data/staging/pages.jsonl
-
 python -m transport_law validate-data
-python -m transport_law evaluate
-python -m transport_law evaluate --dataset evals/official_retrieval.jsonl
-python -m transport_law evaluate --dataset evals/traffic_police_retrieval.jsonl
+python -m transport_law evaluate --backend bm25
+python -m transport_law evaluate --backend chroma --dataset evals/official_retrieval.jsonl
+python -m transport_law evaluate --backend hybrid --dataset evals/traffic_police_retrieval.jsonl
 python scripts/build_legal_corpus.py --check
 python -m pytest -q
 python -m ruff check src tests
 python -m ruff format --check src tests
+node --check src/transport_law/web/app.js
 ```
 
-PDF 提取只生成待整理文本，不自动成为法规条目；重复输出路径会报错，以免覆盖。表格合并单元格和跨页关系需对照原 PDF 整理，步骤见 [数据整理说明](docs/data-guide.md)。修改资料后重启服务加载新版本。
+Chroma 和 hybrid 评测会调用百炼；BM25 评测及使用替身的测试可以在本地进行。这些维护检查不能替代真实在线模型链路验证，也不代表法律问答准确率或个案适用已经核准。
 
-三套共 70 题的开发回归集分别检查原事项关联依据、法规定位和公安交管检索。随着资料扩充，原来的超速、超载、停车等负例改为有依据的正例；真正范围外的问题仍需返回空。公安交管题覆盖红灯、变道、让行、追尾、酒后事故、非机动车，以及法规条号、裁量表项和不存在的位置。这些结果不能表示真实场景准确率。版本合并、PDF 页码、错误引用、模型错误和事实边界另有单元测试。验证结果见 [验证记录](docs/validation.md)。
+人工资料整理使用 `extract-pdf`、`chunk-document` 和 `scripts/chunk_legal_corpus.py`；上传 API 则负责自动追加入库。单独生成的 `DraftChunk` 是待审核草稿，不会因文件存在或服务重启自动进入正式法规库。扫描件需先 OCR，裁量表需核对列关系、档次和跨页内容。具体步骤见 [数据整理说明](docs/data-guide.md) 和 [自动分块说明](docs/chunking.md)。
 
-后续按 [开发路线](docs/roadmap.md) 依次推进完整法源核验、裁量规则、混合检索、会话状态和 AgentScope；当前没有对话记忆、自动法规更新或图像巡检。
+**资料效力与个案适用尚需核验。**助手可解释材料和提示缺失事实，不自动认定用户未提供的事实、不自动选定处罚档次或计算确定罚款。引用校验确认出处属于本次检索，不保证模型解释得到原文充分支持。
+
+设计细节见 [架构说明](docs/architecture.md) 和 [在线问答链](docs/qa-chain.md)，历史检查与调用证据见 [验证记录](docs/validation.md)。

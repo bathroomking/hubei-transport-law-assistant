@@ -1,8 +1,8 @@
 # 上传知识库文档
 
-上传接口接收 PDF、TXT 和 Markdown，保存原文件后在后台完成文字提取、分块、百炼 embedding 和 Chroma 入库。每份文档独立处理；新增文件不会重新计算已入库文件或现有法规库的 1,338 个向量。只有状态为 `ready` 的文档参与上传库检索。
+上传接口接收 PDF、TXT 和 Markdown，保存原文件后在后台完成文字提取、分块、百炼 embedding 和 Chroma 入库。每份文档独立处理；新增文件不会重新计算已入库文件或现有法规库的向量。只有状态为 `ready` 的文档参与统一问答检索。
 
-上传库与已整理法规库分别使用独立的 Chroma collection。原 `/api/v1/retrieve`、`/api/v1/ask` 和网页工作台仍使用已整理法规库；上传资料通过本文的 `/api/v1/knowledge/*` 接口检索和问答。上传资料自动标记为待核验，不自动判断法源类型、法律效力、地域或具体处罚档次。
+上传库与已整理法规库分别使用独立的 Chroma collection，但通过同一个网页、CLI `ask` 和 `POST /api/v1/ask` 提问。`/api/v1/knowledge/documents` 系列接口只负责上传、列表、状态和重试管理，不再提供独立的上传库检索或问答入口。上传资料自动标记为待核验，不自动判断法源类型、法律效力、地域或具体处罚档次。
 
 ## 安装与启动
 
@@ -13,7 +13,7 @@ python -m pip install -e ".[ingest,vectors]" -c constraints.txt
 python -m transport_law serve
 ```
 
-在已有本地 `.env` 中配置 `DASHSCOPE_API_KEY`，沿用项目的 `text-embedding-v4`、维度和百炼接口设置。不要覆盖其他已有配置。上传分块会向百炼发送用于生成向量的文档内容并使用 API 额度；上传库语义检索也会发送问题文本。`/knowledge/ask` 还需要 `DEEPSEEK_API_KEY`，并会向 DeepSeek 发送本次问题和检索到的资料。
+在已有本地 `.env` 中配置 `DASHSCOPE_API_KEY`，沿用项目的 `text-embedding-v4`、维度和百炼接口设置。不要覆盖其他已有配置。上传分块会向百炼发送用于生成向量的文档内容并使用 API 额度；上传库语义检索也会发送问题文本。统一 `/api/v1/ask` 同时要求配置 `DEEPSEEK_API_KEY`，并在有候选依据时向 DeepSeek 发送问题和检索资料。精确条目 ID 可以直接定位原文、跳过问题 embedding，但仍执行两种密钥配置检查并调用在线回答模型。
 
 可在 [本机接口文档](http://127.0.0.1:8000/docs) 找到上传接口，点击 **Try it out**，选择文件并执行。当前没有单独的网页上传面板。
 
@@ -25,13 +25,15 @@ python -m transport_law serve
 | `GET /api/v1/knowledge/documents` | 列出上传记录及处理状态 |
 | `GET /api/v1/knowledge/documents/{id}` | 查看一份文档的状态、分块数、已写向量数和错误信息 |
 | `POST /api/v1/knowledge/documents/{id}/retry` | 恢复失败或已中断任务；返回 `202`，复用已保存的分块及成功批次 |
-| `POST /api/v1/knowledge/retrieve` | 在已完成的上传文档中检索，支持 BM25、向量或 RRF 混合，返回原文和来源 |
-| `GET /api/v1/knowledge/chunks/{chunk_id}` | 按 ID 查看一条已完成入库的上传片段 |
-| `POST /api/v1/knowledge/ask` | 检索上传资料，再由 DeepSeek 生成带引用的解释 |
+| `POST /api/v1/ask` | 在正式法规和 ready 上传资料中统一检索，在线生成解释与补问 |
+| `GET /api/v1/articles/{chunk_id}` | 查看正式或上传资料的引用原文与来源 |
+| `GET /api/v1/documents/{document_id}?version_id=...` | 查看指定文档版本的全部已收录内容及覆盖范围 |
 
-`retrieve` 和 `ask` 接收 `{"question": "问题", "top_k": 5}`，`top_k` 为 1–10。原资料库与上传库的检索分数不直接混合；上传库目前没有经过真实业务数据标定的相似度拒答阈值。
+统一问答接收 `{"question": "问题"}`，前端不展示检索参数。产品固定使用 hybrid：先对正式法规和 ready 上传条目建立同一套 BM25 统计，得到一路全局关键词排名；两座向量库复用同一个问题向量，在相同 embedding 合约与 cosine 度量下合并、排序成一路全局 dense 排名，然后对这两路执行 RRF。不会把两份已分别计算的 RRF 分数简单相加。
 
-可在 `.env` 设置 `KNOWLEDGE_RETRIEVAL_BACKEND=hybrid` 并重启服务，启用 BM25 + 向量 + RRF；默认保持 `chroma`，也支持 `bm25` 离线检索已有 `ready` 片段。两路都搜索全部已完成片段，新文档变为 `ready` 后下一次请求即可召回，不重新生成已有文档向量。正式法规由独立的 `RETRIEVAL_BACKEND` 控制。算法、候选窗口和排名字段见 [混合检索说明](hybrid-retrieval.md)。
+普通自然语言问题使用 `broad=True` 召回，不再要求命中旧的事项别名才能进入候选；明确的法规名称、条号和精确 ID 仍保留定位约束。两库使用相同模型与维度，查询不重新生成已有文档向量。新文档变为 `ready` 后，下一次问题就可在两路排名中召回，无需重启。
+
+上传库没有经过业务标定的相似度拒答阈值。全库语义召回可以找到相关候选，但是否足以回答仍由基于材料的问答链判断，不能把“有向量命中”等同于“有足够依据”。算法说明及历史评测边界见 [混合检索说明](hybrid-retrieval.md)。
 
 ## 一次完整调用
 
@@ -59,15 +61,15 @@ curl -sS "http://127.0.0.1:8000/api/v1/knowledge/documents/$document_id"
 | `embedded_count` | 已成功写入的向量数 |
 | `error_code` / `error_message` | 失败时可供排查的错误，不含 API Key |
 
-状态变为 `ready` 后检索：
+状态变为 `ready` 后，通过统一问答入口提问：
 
 ```bash
-curl -sS -X POST http://127.0.0.1:8000/api/v1/knowledge/retrieve \
+curl -sS -X POST http://127.0.0.1:8000/api/v1/ask \
   -H 'Content-Type: application/json' \
-  -d '{"question":"这份资料对施工许可有哪些规定？","top_k":5}'
+  -d '{"question":"这份资料对施工许可有哪些规定？"}'
 ```
 
-使用同一请求体调用 `/api/v1/knowledge/ask` 可生成带引用的解释。返回的 `sources` 保留原文件名、文件 SHA-256、片段原文和位置；PDF 保留真实页码，TXT/Markdown 使用字符位置，不填造 PDF 页码。所有上传资料的核验状态均为 `pending`。
+该问题会同时检索正式法规与全部 ready 上传资料；当前请求不提供指定单份上传文档的过滤参数。返回的 `sources` 保留原文件名、文件 SHA-256、片段原文和位置；PDF 保留真实页码，TXT/Markdown 使用字符位置，不填造 PDF 页码。所有上传资料的核验状态均为 `pending`。引用详情通过 `/api/v1/articles/{chunk_id}` 查看；使用引用中的 `document_id` 与 `version_id` 查看文档时，覆盖类型为 `uploaded_document`，可能包含重叠片段，不代表整部法规全文。
 
 失败或进程中断后，使用原文档 ID 重试：
 
@@ -122,7 +124,9 @@ UPLOAD_MAX_BYTES=20971520
 
 上传资料以通用 `document` 片段收录，不会补造执法事项、法效核验或裁量规则。已有 `data/processed/legal_chunks.jsonl` 和法规索引的整理流程保持独立；把上传材料正式整理进法规资料库仍需核对原件、来源和业务字段。
 
-## 2026-11-05 验证
+## 2026-11-05 历史上传验证
+
+以下记录对应统一入口改造前的独立上传库流程，测试数量、旧片段接口及检索结果仅说明当时验证情况，不是当前双库 `UnifiedRetriever` 的回归结果或准确率。
 
 - 全套自动化测试 193 项通过，包含 27 项上传专项：四格式、同名与并发保护、来源、逐文档追加、失败续传、任务互斥、中断恢复、重启复用和问答引用。出现 41 条 Chroma 依赖库既有配置弃用提示。
 - 在隔离临时目录启动真实本机 HTTP 服务，分别上传自造的 TXT、MD、Markdown 和文本 PDF。四次请求均先返回 `202 / queued`，随后变为 `ready`，真实百炼 `text-embedding-v4` 共生成 4 个 2048 维向量。

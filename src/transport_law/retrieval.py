@@ -66,8 +66,8 @@ class BM25Retriever:
             chunk for ident, chunk in self.by_id.items() if normalize(ident) in normalized_question
         ]
 
-    def candidate_chunks(self, question: str) -> list[LegalChunk]:
-        """复用法规名、条号及事项范围约束；向量检索只替换候选内的排序。"""
+    def candidate_chunks(self, question: str, *, broad: bool = False) -> list[LegalChunk]:
+        """保留指定法规/条号；在线白话问答可在未指定法规时搜索全库。"""
         normalized_question = normalize(question)
         names = {
             (normalize(alias), chunk.document_id)
@@ -101,7 +101,7 @@ class BM25Retriever:
                     continue
                 if table_ref and table_ref[0] not in normalize(chunk.article):
                     continue
-            elif chunk.item_id not in candidate_items:
+            elif not broad and chunk.item_id not in candidate_items:
                 continue
             candidates.append(chunk)
         return candidates

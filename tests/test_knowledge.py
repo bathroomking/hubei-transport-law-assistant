@@ -19,6 +19,12 @@ pytest.importorskip("langchain_text_splitters")
 BASE = "/api/v1/knowledge"
 
 
+def uploaded_hits(client, question, top_k=5):
+    return [
+        hit.model_dump(mode="json") for hit in client.app.state.knowledge.search(question, top_k)
+    ]
+
+
 class CountingEmbeddings:
     def __init__(self):
         self.calls = []
@@ -50,6 +56,7 @@ def upload_setup(settings, tmp_path, monkeypatch):
             "embedding_dimensions": 2,
             "embedding_batch_size": 2,
             "dashscope_api_key": SecretStr("offline-test-key"),
+            "deepseek_api_key": SecretStr("offline-test-key"),
         }
     )
     embedder = CountingEmbeddings()
@@ -97,9 +104,7 @@ def test_upload_all_formats_becomes_searchable_with_real_source(upload_setup, ex
         assert record["status"] == "ready", record
         assert record["chunk_count"] == record["embedded_count"] > 0
         assert client.get(f"{BASE}/documents").json() == [record]
-        found = client.post(f"{BASE}/retrieve", json={"question": "施工许可"})
-        assert found.status_code == 200, found.text
-        hits = found.json()["hits"]
+        hits = uploaded_hits(client, "施工许可")
         assert hits
         chunk = hits[0]["chunk"]
         assert chunk["kind"] == "document"
@@ -110,7 +115,7 @@ def test_upload_all_formats_becomes_searchable_with_real_source(upload_setup, ex
         assert chunk["source"]["locator"]
         assert chunk["source"]["pdf_page"] == (1 if extension == "pdf" else None)
         assert chunk["source"]["source_type"] == ("md" if extension == "markdown" else extension)
-        assert client.get(f"{BASE}/chunks/{chunk['id']}").json() == chunk
+        assert client.get(f"/api/v1/articles/{chunk['id']}").json() == chunk
         from transport_law.vector_store import chroma_client
 
         assert [row.name for row in chroma_client(settings).list_collections()] == [
@@ -144,22 +149,22 @@ def test_new_document_only_embeds_new_chunks_and_is_visible_without_restart(uplo
     settings, embedder = upload_setup
     settings = settings.model_copy(update={"knowledge_retrieval_backend": backend})
     with TestClient(create_app(settings)) as client:
-        assert client.get("/health").json()["knowledge_retrieval_backend"] == backend
-        assert client.post(f"{BASE}/retrieve", json={"question": "document"}).json()["hits"] == []
+        assert client.get("/health").json()["retrieval_backend"] == "hybrid"
+        # 存储层仍覆盖三种算法；产品问答入口固定在线混合检索。
+        client.app.state.knowledge.settings = settings
+        assert uploaded_hits(client, "document") == []
         for name, text in [("one.txt", b"First document."), ("two.md", b"Second document.")]:
             response = client.post(f"{BASE}/documents", files={"file": (name, text)})
             assert response.status_code == 202
             # 查询后再追加，BM25 不得一直使用第一次请求的过期快照。
-            result = client.post(f"{BASE}/retrieve", json={"question": "document", "top_k": 5})
-            hits = result.json()["hits"]
+            hits = uploaded_hits(client, "document")
             assert any(hit["chunk"]["source"]["file"] == name for hit in hits)
             if backend == "hybrid":
                 assert all(hit["retrieval"]["bm25_rank"] for hit in hits)
                 assert all(hit["retrieval"]["dense_rank"] for hit in hits)
         assert len(embedder.calls) == 2
         assert len(embedder.successful_texts) == 2
-        result = client.post(f"{BASE}/retrieve", json={"question": "document", "top_k": 5})
-        assert {hit["chunk"]["source"]["file"] for hit in result.json()["hits"]} == {
+        assert {hit["chunk"]["source"]["file"] for hit in uploaded_hits(client, "document")} == {
             "one.txt",
             "two.md",
         }
@@ -258,7 +263,7 @@ def test_bad_document_fails_explicitly_without_publishing(upload_setup, filename
         assert record["status"] == "failed"
         assert record["error_code"]
         assert record["error_message"]
-        assert client.post(f"{BASE}/retrieve", json={"question": "任何内容"}).json()["hits"] == []
+        assert uploaded_hits(client, "任何内容") == []
     assert not embedder.calls
     assert not embedder.queries
 
@@ -276,9 +281,7 @@ def test_retry_reuses_chunks_and_successful_batches(upload_setup, monkeypatch):
         assert before["status"] == "failed"
         assert before["embedded_count"] == 2
         assert before["chunk_count"] > 2
-        assert (
-            client.post(f"{BASE}/retrieve", json={"question": "Road permit"}).json()["hits"] == []
-        )
+        assert uploaded_hits(client, "Road permit") == []
 
         def unexpected_chunking(*args, **kwargs):
             pytest.fail("重试应读取已保存的分块，不能再次切分")
@@ -327,6 +330,7 @@ def test_partial_failed_vectors_do_not_hide_ready_document(upload_setup, backend
     embedder.fail_on_call = 2
     text = "\n".join(f"# Section {number}\nUnfinished permit {number}." for number in range(7))
     with TestClient(create_app(settings)) as client:
+        client.app.state.knowledge.settings = settings
         response = client.post(f"{BASE}/documents", files={"file": ("failed.md", text.encode())})
         document_id = response.json()["id"]
         assert client.get(f"{BASE}/documents/{document_id}").json()["status"] == "failed"
@@ -337,10 +341,9 @@ def test_partial_failed_vectors_do_not_hide_ready_document(upload_setup, backend
             ).status_code
             == 202
         )
-        result = client.post(f"{BASE}/retrieve", json={"question": "permit", "top_k": 1})
-        assert result.status_code == 200
-        assert len(result.json()["hits"]) == 1
-        assert result.json()["hits"][0]["chunk"]["source"]["file"] == "ready.txt"
+        hits = uploaded_hits(client, "permit", top_k=1)
+        assert len(hits) == 1
+        assert hits[0]["chunk"]["source"]["file"] == "ready.txt"
 
 
 def test_same_job_cannot_run_or_retry_concurrently(upload_setup, monkeypatch):
@@ -440,20 +443,23 @@ def test_uploaded_qa_uses_stored_sources_and_rejects_invented_citations(upload_s
 
     llm = FakeLLM()
     with TestClient(create_app(settings, llm)) as client:
+        client.app.state.knowledge.settings = settings
+        client.app.state.runtime.service.retriever = client.app.state.knowledge
+        assert client.app.state.runtime.knowledge is client.app.state.knowledge
         assert (
             client.post(
                 f"{BASE}/documents", files={"file": ("source.txt", "施工前需办理许可。".encode())}
             ).status_code
             == 202
         )
-        answer = client.post(f"{BASE}/ask", json={"question": "施工许可"})
+        answer = client.post("/api/v1/ask", json={"question": "施工许可"})
         assert answer.status_code == 200, answer.text
         source = answer.json()["sources"][0]
         assert answer.json()["source_documents"] == [source]
-        assert source == client.get(f"{BASE}/chunks/{source['id']}").json()
+        assert source == client.get(f"/api/v1/articles/{source['id']}").json()
         assert answer.json()["applicability_status"] == "not_verified"
         llm.forged = True
-        error = client.post(f"{BASE}/ask", json={"question": "施工许可"})
+        error = client.post("/api/v1/ask", json={"question": "施工许可"})
         assert error.json()["error"]["code"] == "invalid_citation"
 
 
@@ -462,4 +468,4 @@ def test_unknown_upload_and_chunk_return_404(upload_setup):
     with TestClient(create_app(settings)) as client:
         assert client.get(f"{BASE}/documents/unknown").status_code == 404
         assert client.post(f"{BASE}/documents/unknown/retry").status_code == 404
-        assert client.get(f"{BASE}/chunks/unknown").status_code == 404
+        assert client.get("/api/v1/articles/unknown").status_code == 404

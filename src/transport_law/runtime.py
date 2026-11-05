@@ -1,42 +1,44 @@
 from dataclasses import dataclass
 
 from transport_law.config import Settings
-from transport_law.discretion import DiscretionService
+from transport_law.knowledge import KnowledgeStore
 from transport_law.llm import DeepSeekClient, LanguageModel
+from transport_law.online import CombinedRepository, OnlineLawService, UnifiedRetriever
 from transport_law.repository import LawRepository
-from transport_law.retrieval import BM25Retriever
-from transport_law.service import LawService
+from transport_law.retrieval import Retriever
 
 
 @dataclass
 class Runtime:
     settings: Settings
-    repository: LawRepository
-    service: LawService
-    discretion: DiscretionService
+    repository: CombinedRepository
+    service: OnlineLawService
+    knowledge: KnowledgeStore
 
 
-def build_runtime(settings: Settings | None = None, llm: LanguageModel | None = None) -> Runtime:
-    settings = settings or Settings()
-    repository = LawRepository.from_jsonl(settings.law_data_path)
-    if settings.retrieval_backend == "hybrid":
-        from transport_law.hybrid import HybridRetriever
-
-        retriever = HybridRetriever(repository, settings)
-    elif settings.retrieval_backend == "chroma":
-        from transport_law.vector_store import ChromaRetriever
-
-        retriever = ChromaRetriever(repository, settings)
-    else:
-        retriever = BM25Retriever(repository)
+def build_runtime(
+    settings: Settings | None = None,
+    llm: LanguageModel | None = None,
+    *,
+    retriever: Retriever | None = None,
+) -> Runtime:
+    settings = (settings or Settings()).model_copy(
+        update={"retrieval_backend": "hybrid", "knowledge_retrieval_backend": "hybrid"}
+    )
+    curated = LawRepository.from_jsonl(settings.law_data_path)
+    knowledge = KnowledgeStore(
+        settings, reserved_filenames=[chunk.source.file for chunk in curated.all_chunks]
+    )
+    repository = CombinedRepository(curated, knowledge)
     return Runtime(
         settings=settings,
         repository=repository,
-        service=LawService(
+        service=OnlineLawService(
             repository,
-            retriever,
+            retriever if retriever is not None else UnifiedRetriever(curated, knowledge, settings),
             llm or DeepSeekClient(settings),
             top_k=settings.retrieval_top_k,
+            settings=settings,
         ),
-        discretion=DiscretionService(settings.discretion_data_path, repository),
+        knowledge=knowledge,
     )

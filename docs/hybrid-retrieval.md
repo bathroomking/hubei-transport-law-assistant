@@ -1,73 +1,84 @@
-# BM25 + 向量 + RRF 混合检索
+# 统一在线问答中的 BM25 + 向量 + RRF
 
-已实现 `hybrid` 检索模式，复用现有百炼 `text-embedding-v4` 和 Chroma 持久化向量。切换检索模式无需重新分块或生成文档向量。
+产品通过网页、CLI `ask` 和 `POST /api/v1/ask` 提供一条固定在线问答链。`UnifiedRetriever` 联合正式法规和已完成入库的上传资料，不提供独立检索页面、检索 API 或离线问答模式。百炼 `text-embedding-v4` 与 Chroma 保存的文档向量继续复用，无需因入口调整重新分块。
 
-## 查询如何执行
+## 当前查询如何执行
 
 ```mermaid
 flowchart LR
-  Q[用户问题] --> S[确定可检索范围]
-  S --> B[BM25 关键词召回]
-  S --> E[百炼生成问题向量]
-  E --> D[Chroma cosine 语义召回]
-  B --> R[按法条 ID 去重并做 RRF]
+  Q[问题 + 两种密钥配置检查] --> X{包含精确条目 ID?}
+  X -- 是 --> I[直取原文]
+  X -- 否 --> C[正式法规 + ready 上传快照]
+  C --> B[共享统计的全局 BM25 排名]
+  C --> E[生成一次问题向量]
+  E --> D[双库 cosine 结果合成全局 dense 排名]
+  B --> R[两路 RRF 融合]
   D --> R
-  R --> T[取前 top_k 条并回填原文出处]
-  T --> A[直接展示或交给 DeepSeek 解释]
+  I --> A[有依据时调用 DeepSeek]
+  R --> A
+  A --> V[校验引用并返回原文出处]
 ```
 
-两路并行执行，各自最多取 50 个候选，最后默认返回 5 条。BM25 擅长词语、法规名称和条号匹配；向量模型把问题转换为与文档相同的 2048 维表示，Chroma 按 cosine 距离查找相近内容。问题使用 `text_type=query` 与查询指令，文档使用 `text_type=document`，沿用已有输入规范。
+普通问题使用 `candidate_chunks(..., broad=True)`，不再要求命中人工事项别名才允许召回。明确的法规名称、条号和表项仍约束候选；指定不存在的条号可返回空。精确条目 ID 可以直接获取条目，跳过 embedding 和 RRF，但入口仍要求百炼与 DeepSeek 两种密钥配置，有命中后仍调用 DeepSeek，不构成离线服务。
 
-BM25 原始分数与 cosine 相似度的量纲不同。RRF 只使用各自的名次，默认等权融合：
+每次请求取得一次 ready 上传快照，并与可检索的正式法规组成同一语料集合。BM25 在这个集合上统一计算文档频率、平均长度等统计，得到一路全局关键词排名，而不是分别计算两库 BM25 分数后直接混排。
+
+语义分支为问题生成一次向量，供正式库和上传库复用。两库使用相同 embedding 模型、维度、输入规范和 cosine 度量；各库查询结果按父条目去重后，依据同一相似度尺度排序成一路全局 dense 排名。随后才把全局 BM25 与全局 dense 两路融合，不叠加两份独立 RRF 结果。
+
+两路并行执行，默认各取最多 50 个候选，融合后默认保留 5 条。向量子块回填正式父法条；上传资料按片段 ID 参与排名，不把整份上传文件误当成一个法条。新上传任务变为 `ready` 后，下次请求即可见，无需重启或重算已有文档向量。
+
+## 排名与边界
+
+BM25 分数与 cosine 相似度量纲不同，RRF 只使用这两路的名次，默认等权：
 
 ```text
-RRF(法条) = 1 / (60 + BM25 排名) + 1 / (60 + 向量排名)
+RRF(条目) = 1 / (60 + 全局 BM25 排名) + 1 / (60 + 全局 dense 排名)
 ```
 
-排名从 1 开始；未进入某一路候选窗口时，该路贡献为 0。两路同时靠前的法条通常会排得更高。同一父法条的多个子块先合并，只计算一次排名，长法条不会因为切成更多块而额外加分。分数相同按 ID 稳定排序。`60` 是平滑常数，与候选数量和最终条数是三个不同参数，依据 [Microsoft RRF 说明](https://learn.microsoft.com/en-us/azure/search/hybrid-search-ranking)。
+排名从 1 开始，没有进入某路候选窗口时该路贡献为 0。同一条目在每路只占一个名次；分数相同按 ID 稳定排序。`60` 是平滑常数，不是候选数量或最终返回数量。内部 `SearchHit.retrieval` 保存两路排名及原始分数，供维护诊断；按精确 ID 直取的结果不经过 RRF，相关字段为空。
 
-`SearchHit.score` 在混合模式中是 RRF 分数，**不是相关概率、法律置信度或模型准确率**。新增的 `retrieval` 字段记录 `method`、`rrf_k`、`bm25_rank`、`dense_rank` 及两路原始分数；只在一路出现时，另一路字段为 `null`。按明确 ID 直接定位的结果不经过 RRF，`retrieval` 为 `null`。
+RRF 分数不是相关概率、法律置信度或问答正确率。当前没有经过业务标定的向量拒答阈值；全库召回可能返回不够支持回答的条目，由在线问答链按原文说明资料不足。引用真实且来自本次检索，也不能单独证明解释正确、法规有效或个案适用。
 
-## 使用方式
+## 使用与配置
 
-已有索引时，可以直接执行：
+先按 [README](../README.md) 配置两种密钥并准备正式法规索引，再使用统一入口：
 
 ```bash
 python -m transport_law vector-status
-python -m transport_law retrieve "闯红灯扣几分？" --backend hybrid
-python -m transport_law ask "公路挖沟有哪些依据？" --backend hybrid
-python -m transport_law evaluate --dataset evals/traffic_police_retrieval.jsonl --backend hybrid
+python -m transport_law ask "在湖北普通公路上未经许可挖沟，应查哪些依据？"
+python -m transport_law serve --reload
 ```
 
-`retrieve` 和 `evaluate` 只调用百炼问题向量接口；`ask` 在命中依据后还会调用 DeepSeek。首次安装和文档入库见 [向量检索说明](vector-retrieval.md)。
-
-在本地 `.env` 中设置并重启服务后，网页、法规检索 API 和问答会使用选中的模式：
+`ask` 不接受切换后端的 `--backend` 参数。在线业务运行时固定 hybrid；以下是服务端配置，前端不向使用者展示：
 
 ```dotenv
 RETRIEVAL_BACKEND=hybrid
+KNOWLEDGE_RETRIEVAL_BACKEND=hybrid
 HYBRID_CANDIDATE_K=50
 HYBRID_RRF_K=60
 ```
 
-`HYBRID_CANDIDATE_K` 范围为 10–200，`HYBRID_RRF_K` 为 1–1000，最终 `top_k` 仍为 1–10。`bm25`、`chroma`、`hybrid` 三种后端均保留；命令行 `--backend` 只覆盖当前命令，不改 `.env`。新环境默认仍是 BM25，原因见下方实测结果。
+`HYBRID_CANDIDATE_K` 范围为 10–200，`HYBRID_RRF_K` 为 1–1000。问答 API 保留 1–10 的可选 `top_k`，网页只发送 `question`。修改配置不能让在线业务绕过密钥检查或退回 BM25 回答。
 
-服务启动读取正式 JSONL、构建内存 BM25 统计并校验已有 Chroma 索引；不会重新分块或生成文档向量。一次普通混合查询只生成一次问题向量。缺失、未完成、语料/模型不匹配的索引会报错；百炼查询失败也会明确报错，不把单路结果标记为成功融合。需要离线检索时可以显式选择 `bm25`。
+服务启动加载已整理条目；普通查询需要时再打开和校验向量索引。未建库时页面可启动，提问会明确报告索引问题。缺失、不完整、语料或模型不匹配的索引，以及百炼查询失败，都不会悄悄降级为单路问答。无候选时不调用回答模型；精确 ID 直取可省略打开向量索引和查询向量的步骤。
 
-## 正式法规与上传资料的范围
+上传管理仍使用 `/api/v1/knowledge/documents` 的上传、列表、状态和重试接口。ready 上传资料自动进入统一 `/api/v1/ask`；来源读取统一使用 `/api/v1/articles/{chunk_id}` 和 `/api/v1/documents/{document_id}?version_id=...`。上传文档的全文范围标为 `uploaded_document`，不会自动发布为正式法规，见 [上传知识库说明](knowledge-upload.md)。
 
-正式法规入口 `/api/v1/retrieve`、`/api/v1/ask` 使用 `RETRIEVAL_BACKEND`。本版两路共用原有法规名消歧、条号和事项别名范围约束；不存在的条号以及没有候选的范围外问题不会发出向量请求。向量负责候选内的语义排序，**尚未实现不依赖事项别名的全库语义召回**。BM25 和向量都返回正式父法条，引用 ID、完整原文、官方 URL/PDF 页码及核验状态保持一致。
+## 维护评测与当前问答的区别
 
-新上传资料入口 `/api/v1/knowledge/retrieve`、`/api/v1/knowledge/ask` 独立选择模式：
-
-```dotenv
-KNOWLEDGE_RETRIEVAL_BACKEND=hybrid
+```bash
+python -m transport_law evaluate --backend bm25
+python -m transport_law evaluate --backend chroma --dataset evals/official_retrieval.jsonl
+python -m transport_law evaluate --backend hybrid --dataset evals/traffic_police_retrieval.jsonl
 ```
 
-上传库默认保持原来的 `chroma`，也可以选择 `bm25`。上传片段尚没有人工整理的执法事项标签，所以两路都从全部 `ready` 片段中召回，不套用正式法规的事项别名过滤。每次请求取得一次已完成资料快照；新文档处理为 `ready` 后，下一次查询即可在 BM25 和向量两路中看到，无需重启。上传库 RRF 按片段 ID 合并，不把整份文件当成一个法条；失败或处理中任务的部分结果均不参与召回。
+这些命令比较正式法规库的既有检索器；其中 hybrid 使用旧受限候选 `HybridRetriever`，并不运行当前双库 `UnifiedRetriever`。维护评测保留算法选项，不改变用户问答链。Chroma 和 hybrid 评测调用百炼，不调用 DeepSeek。
 
-正式法规与上传库仍使用独立入口和 collection；本次没有将未经核验的上传片段自动发布为正式法规。上传库目前没有经过业务标定的相似度拒答阈值，RRF 本身也不提供“资料足够”的判断。上传与来源规则见 [上传知识库说明](knowledge-upload.md)。
+要评估当前产品，需要另行覆盖未命中旧事项别名的口语问题、正式与上传资料竞争、精确定位、范围外问题及资料不足拒答，并核对真实在线回答和出处。既有固定题集可以作为维护基线，但不能把其通过率当作全库问答正确率。
 
-## 2026-11-05 真实检索对照
+## 2026-11-05 历史检索对照：受限候选 HybridRetriever
+
+**以下结果属于旧的受限候选 `HybridRetriever` 及同范围 BM25 / Chroma 对照，不是本次 `broad=True`、双库全局排名的 `UnifiedRetriever` 正确率。** 当时只比较正式法规库，没有把 ready 上传文档加入全局 BM25 统计或 dense 排名。
 
 使用既有 1,338 个向量、1,336 个父记录，在相同范围约束、`top_k=5` 下比较；未改变回归题、预期 ID 或融合默认参数来提高分数。70 条用例共 69 个不同问题，58 个需要生成问题向量，其余为明确 ID 或空候选。Chroma 与 hybrid 共用一次评测内存中的问题向量，无接口错误。
 
@@ -80,9 +91,9 @@ KNOWLEDGE_RETRIEVAL_BACKEND=hybrid
 
 交管组的正例平均 Recall@5：BM25 为 1.0000、Chroma 为 0.8782、RRF 为 0.9615。正例须全部预期依据进入前 5 条才算通过；负例须返回空。RRF 补回右转让行、酒后事故处理和红灯记分三题，但红灯碰撞、电动车逆行两题仍有预期条文未进入前 5 条。例如“闯红灯扣几分？”的预期记分条文在 BM25 排第 1、向量排第 34，融合后排第 4。
 
-**因此正式法规默认仍保留 BM25，混合模式作为可选择、可评测的后端。** 这些是既有开发回归样例，不代表真实业务准确率；没有验证真实 DeepSeek 回答质量，也没有据此确认法规效力或具体案件适用。进一步优化应补充独立的口语问题评测，再评估候选范围、重排和融合参数，不能仅凭加入 RRF 就认定效果一定更好。
+当时据此保留 BM25 为旧产品默认；当前产品已固定统一在线 hybrid 问答，该历史选择不再是当前使用方式。 这些是既有开发回归样例，不代表真实业务准确率；没有验证真实 DeepSeek 回答质量，也没有据此确认法规效力或具体案件适用。进一步优化应补充独立的口语问题评测，再评估候选范围、重排和融合参数，不能仅凭加入 RRF 就认定效果一定更好。
 
-复现对照：
+复现旧受限候选算法对照（不覆盖当前 `UnifiedRetriever`）：
 
 ```bash
 python scripts/compare_retrieval.py --output data/local/validation/hybrid_comparison.json
@@ -92,6 +103,6 @@ python scripts/compare_retrieval.py --output data/local/validation/hybrid_compar
 
 初次完整报告为 Git 忽略的 `data/local/validation/hybrid_20261105.json`。修复英文 BM25 单词边界后，最终复核的原事项组出现一次 `embedding_unavailable` 网络错误；单线程复跑该 20 题组全部成功，其他两组无需补跑，最终三路指标与上表一致。原始记录保留在 `hybrid_20261105_final.json` 和 `hybrid_20261105_retrieval_retry.json`，合并验证记录为 `hybrid_20261105_verified.json`。
 
-最终全套自动化测试 **223 项通过**，Ruff、格式检查、前端 JavaScript 语法检查和 `git diff --check` 通过。Chroma 依赖内部有 63 条既有配置弃用提示。真实 FastAPI TestClient 通过 hybrid 模式调用百炼，检索返回 200；逐条核对 RRF 公式、法条详情回填与来源一致，持久化向量数量仍为 1,338。未调用真实 DeepSeek，未启动或重启用户服务；API 记录为 `data/local/validation/api_hybrid_20261105.json`。
+当时全套自动化测试 **223 项通过**，Ruff、格式检查、前端 JavaScript 语法检查和 `git diff --check` 通过。Chroma 依赖内部有 63 条既有配置弃用提示。真实 FastAPI TestClient 通过 hybrid 模式调用百炼，检索返回 200；逐条核对 RRF 公式、法条详情回填与来源一致，持久化向量数量仍为 1,338。未调用真实 DeepSeek，未启动或重启用户服务；API 记录为 `data/local/validation/api_hybrid_20261105.json`。
 
-实现入口：`hybrid.py` 为并行召回与 RRF，`retrieval.py` 为 BM25，`vector_store.py` 为正式向量检索，`runtime.py` 选择后端，`knowledge.py` 接入上传资料。自动化验证覆盖排名融合、子块去重、候选窗口、并行执行、空范围短路、故障透传、来源回填、引用拦截和上传后即时可检索。
+当前实现入口：`online.py` 装配双库快照、全局 BM25/dense 排名及在线密钥检查，`hybrid.py` 复用 RRF 融合并保留旧 `HybridRetriever` 供维护评测，`vector_store.py` 与 `knowledge.py` 分别读取两座持久向量库，`runtime.py` 固定在线业务配置。当前全库问答的召回与拒答质量需要独立评估，不能引用上表作为验证结论。

@@ -82,15 +82,41 @@ def test_named_traffic_law_and_table_locations_do_not_overlap(retriever):
         assert [hit.chunk.id for hit in retriever.search(query)] == [expected]
 
 
-def test_police_sources_are_available_through_api(settings):
+def test_police_sources_are_available_through_api(settings, retriever):
     with TestClient(create_app(settings)) as client:
-        article = client.get("/api/v1/articles/hb-traffic-2017-A056").json()
+        response = client.get("/api/v1/articles/hb-traffic-2017-A056")
+        assert response.status_code == 200
+        article = response.json()
         assert article["source"]["supporting_sources"][0]["official_url"].startswith(
             "https://www.hppc.gov.cn/"
         )
-        response = client.post("/api/v1/retrieve", json={"question": "变更车道发生剐蹭"})
-        assert response.json()["hits"][0]["chunk"]["id"] == "cn-traffic-implementation-2017-A044"
-        # 文档扩充不生成新的自动裁量规则。
+        selected = retriever.search("变更车道发生剐蹭", 1)[0].chunk
+        assert selected.id == "cn-traffic-implementation-2017-A044"
+        response = client.get(f"/api/v1/articles/{selected.id}")
+        assert response.status_code == 200
+        assert response.json() == selected.model_dump(mode="json")
+
+        compiled = client.get(
+            "/api/v1/documents/hb-traffic", params={"version_id": "hb-traffic-2017"}
+        )
+        assert compiled.status_code == 200
+        assert compiled.json()["coverage"] == "full_text"
+        assert "非官方重发全文" in compiled.json()["coverage_note"]
+        assert compiled.json()["articles"][55] == article
+
+        police = client.get(
+            "/api/v1/documents/hb-police-discretion",
+            params={"version_id": "hb-police-discretion-2026"},
+        )
+        assert police.status_code == 200
+        body = police.json()
+        assert body["coverage"] == "selected_sections"
+        assert "未收录其他管理册" in body["coverage_note"]
+        assert len(body["articles"]) == 51
+        assert body["articles"][19]["id"] == "hb-police-discretion-2026-G020"
+        assert body["articles"][19]["source"]["pdf_page"] == 12
+        assert body["articles"][-1]["id"] == "hb-police-discretion-2026-T029"
+        # 问答产品不开放独立裁量接口。
         assert client.get("/api/v1/discretion/hb-police-discretion").status_code == 404
 
 

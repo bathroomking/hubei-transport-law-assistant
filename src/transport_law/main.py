@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from transport_law import __version__
 from transport_law.config import Settings
 from transport_law.errors import AppError
+from transport_law.knowledge_api import router as knowledge_router
 from transport_law.llm import LanguageModel
 from transport_law.runtime import build_runtime
 from transport_law.schemas import (
@@ -25,6 +26,20 @@ def create_app(settings: Settings | None = None, llm: LanguageModel | None = Non
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.runtime = build_runtime(settings, llm)
+        from transport_law.knowledge import KnowledgeStore
+        from transport_law.service import LawService
+
+        runtime = app.state.runtime
+        app.state.knowledge = KnowledgeStore(
+            runtime.settings,
+            reserved_filenames=[chunk.source.file for chunk in runtime.repository.searchable],
+        )
+        app.state.knowledge_service = LawService(
+            app.state.knowledge,
+            app.state.knowledge,
+            runtime.service.llm,
+            top_k=runtime.settings.retrieval_top_k,
+        )
         yield
 
     app = FastAPI(
@@ -39,6 +54,7 @@ def create_app(settings: Settings | None = None, llm: LanguageModel | None = Non
     )
     web_directory = Path(__file__).resolve().parent / "web"
     app.mount("/static", StaticFiles(directory=web_directory), name="static")
+    app.include_router(knowledge_router)
 
     @app.exception_handler(AppError)
     async def application_error(request: Request, exc: AppError):

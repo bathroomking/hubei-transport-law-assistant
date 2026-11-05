@@ -52,3 +52,6 @@ zstandard==0.25.0
 
 # 可选 vectors 组件，2026-11-05 本地验证。
 chromadb==1.5.9
+
+# multipart 知识库上传接口。
+python-multipart==0.0.33

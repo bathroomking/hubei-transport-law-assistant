@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     )
     chroma_path: Path = PROJECT_ROOT / "data/local/chroma"
     chroma_collection: str = Field(default="transport_law_bailian_v4_2048_v1", min_length=3)
+    knowledge_path: Path = PROJECT_ROOT / "data/local/knowledge"
+    knowledge_collection: str = Field(default="transport_uploads_v4_2048_v1", min_length=3)
+    upload_max_bytes: int = Field(default=20 * 1024 * 1024, gt=0, le=100 * 1024 * 1024)
 
     @field_validator("deepseek_base_url", "dashscope_base_url")
     @classmethod
@@ -71,7 +74,7 @@ class Settings(BaseSettings):
             raise ValueError("EMBEDDING_DIMENSIONS 必须是百炼 text-embedding-v4 支持的维度")
         return value
 
-    @field_validator("law_data_path", "discretion_data_path", "chroma_path")
+    @field_validator("law_data_path", "discretion_data_path", "chroma_path", "knowledge_path")
     @classmethod
     def resolve_path(cls, value: Path) -> Path:
         return value if value.is_absolute() else PROJECT_ROOT / value

@@ -6,7 +6,7 @@ from transport_law.retrieval import BM25Retriever
 
 
 @pytest.fixture
-def settings(monkeypatch):
+def settings(monkeypatch, tmp_path):
     # 本地 .env 和真实 Key 永远不进入离线测试。
     for key in (
         "DEEPSEEK_API_KEY",
@@ -29,9 +29,12 @@ def settings(monkeypatch):
         "EMBEDDING_QUERY_INSTRUCTION",
         "CHROMA_PATH",
         "CHROMA_COLLECTION",
+        "KNOWLEDGE_PATH",
+        "KNOWLEDGE_COLLECTION",
+        "UPLOAD_MAX_BYTES",
     ):
         monkeypatch.delenv(key, raising=False)
-    return Settings(_env_file=None)
+    return Settings(_env_file=None, knowledge_path=tmp_path / "knowledge")
 
 
 @pytest.fixture

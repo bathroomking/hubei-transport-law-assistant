@@ -15,6 +15,7 @@
 | 模型错误处理 | 缺 Key、认证失败、余额不足、限流、网络失败、总超时、空回复、截断、非法 JSON |
 | 裁量辅助 | 结构化事实输入、缺失字段追问、地域/道路类型检查、边界复核提醒 |
 | 数据整理 | PDF 逐页提取；LangChain 自动对 PDF/TXT/MD 分块，保存文件 SHA-256、来源位置及待审核状态 |
+| 文档上传 | PDF/TXT/Markdown 上传 API；同名拒绝，后台切分和 embedding，Chroma 增量入库、状态查询与失败续传；上传库独立检索和问答 |
 | 使用入口 | 本地中文前端、命令行、HTTP API、可操作的 `/docs` 页面 |
 | 回归评测 | 离线测试、20 条原事项/扩充范围题、20 条法规定位题和 30 条公安交管检索题 |
 
@@ -132,6 +133,14 @@ python -m transport_law serve --reload
 | `POST /api/v1/ask` | 带引用解释 | 命中资料后需要 DeepSeek Key；Chroma 查询还需要 百炼 API Key |
 | `GET /api/v1/discretion/{item_id}` | 查看裁量规则草稿 | 否 |
 | `POST /api/v1/discretion/check` | 缺失事实和复核事项检查 | 否 |
+| `POST /api/v1/knowledge/documents` | 上传 PDF/TXT/Markdown；后台切分并写入上传知识库 | 百炼 API Key |
+| `GET /api/v1/knowledge/documents` / `GET /api/v1/knowledge/documents/{id}` | 上传列表与处理进度、错误 | 否 |
+| `POST /api/v1/knowledge/documents/{id}/retry` | 继续失败或中断的上传入库任务 | 缺失向量需百炼 API Key |
+| `POST /api/v1/knowledge/retrieve` | 检索已完成的上传文档 | 百炼 API Key |
+| `GET /api/v1/knowledge/chunks/{chunk_id}` | 读取上传文档片段及来源 | 否 |
+| `POST /api/v1/knowledge/ask` | 基于上传文档生成带引用解释 | 百炼及 DeepSeek API Key |
+
+上传接口在 `/docs` 中使用文件选择器，字段名为 `file`，支持 `.pdf`、`.txt`、`.md`、`.markdown`，默认最大 20 MiB。同名文件返回 `409`；上传返回 `202` 后查询状态，只有 `ready` 才可以检索。上传库使用独立 collection，不重新生成现有法规向量，当前网页工作台仍检索已整理法规。安装依赖、curl 示例和持久化规则见 [上传知识库说明](docs/knowledge-upload.md)。
 
 检索/问答输入示例：
 
@@ -169,6 +178,7 @@ src/transport_law/
   retrieval.py     事项召回与 BM25 排序（不调用模型）
   embeddings.py    阿里云百炼 在线向量接口、校验和重试
   vector_store.py  Chroma 持久化、断点续传与父法条回填
+  knowledge.py     上传登记、同名检查、后台分块入库及上传库检索
   llm.py           DeepSeek HTTP 请求、超时和错误处理
   prompts.py       有证据的解释提示词
   service.py       RAG 流程与引用校验
@@ -185,6 +195,7 @@ data/
   processed/       已整理的知识片段
   rules/           待核验的裁量规则
   staging/         提取结果，默认不提交 Git
+  local/           本地 Chroma、上传原件、登记与处理缓存，不提交 Git
 evals/             检索题集、事实输入示例
 tests/             离线回归测试
 docs/              架构、数据整理和后续计划
@@ -206,6 +217,8 @@ flowchart LR
 
 ## 5. 加入更多资料与验证
 
+希望上传文件后自动切分、生成向量并检索时，使用 [上传知识库 API](docs/knowledge-upload.md)。它支持按文档追加和失败续传；以下命令行流程用于单独生成候选分块及整理正式法规资料。
+
 自动分块需要安装可选的 `ingest` 组件。在项目根目录激活虚拟环境后运行：
 
 ```bash
@@ -219,9 +232,9 @@ python -m transport_law chunk-document data/raw/P020250918567517504506.pdf \
 
 也支持 UTF-8 `.txt`、`.md` 文件。程序优先识别行首条文/章节/Markdown 标题，过长部分再递归切分；每块保存校验值、页内字符位置和待审核状态。参数单位是字符，重叠为目标值，不保证每一块都恰好重叠 120 字。分块在本机完成，不调用 DeepSeek。
 
-读取、条文整理和分块统一传递 LangChain `Document`，正文放在 `page_content`，来源与版本等放在 `metadata`；保存时转换为经过校验的 `DraftChunk`。**只有运行导入命令才会分块；重启服务加载已有正式片段，并根据配置构建 BM25 或打开已完成的 Chroma 索引。**启动不会重新分块或生成文档向量。复制新文件到目录也不会自动触发导入，未来上传功能的任务流程见 [自动分块说明](docs/chunking.md)。
+读取、条文整理和分块统一传递 LangChain `Document`，正文放在 `page_content`，来源与版本等放在 `metadata`；保存时转换为经过校验的 `DraftChunk`。**分块由命令行或上传任务触发，重启服务不会重新分块或生成已有文档向量。**复制新文件到目录不会自动触发导入。已整理法规的批量处理见 [自动分块说明](docs/chunking.md)，新文件自动入库见 [上传知识库说明](docs/knowledge-upload.md)。
 
-输出是 `DraftChunk` 草稿，**不会自动进入检索库**。裁量表仍需核对列关系与完整档次，扫描页需先 OCR。具体格式、使用示例和审核衔接见 [自动分块说明](docs/chunking.md)。
+上述 `chunk-document` 命令输出 `DraftChunk` 草稿，**不会自动进入检索库**；上传 API 则会把片段写入独立上传库并保持待核验状态。裁量表仍需核对列关系与完整档次，扫描页需先 OCR。具体格式、使用示例和审核衔接见 [自动分块说明](docs/chunking.md)。
 
 已经整理入库的全部资料也可批量使用新流程处理：
 

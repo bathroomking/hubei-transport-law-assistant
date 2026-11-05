@@ -27,7 +27,7 @@ class Source(Model):
     file: Text
     sha256: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
     pdf_page: int | None = Field(default=None, ge=1)
-    source_type: Literal["pdf", "web"] = "pdf"
+    source_type: Literal["pdf", "web", "txt", "md"] = "pdf"
     locator: Text | None = None
     retrieved_on: date | None = None
     legal_level: Text | None = None
@@ -50,6 +50,8 @@ class Source(Model):
             self.pdf_page is not None or not self.locator or not self.official_url
         ):
             raise ValueError("网页来源必须提供官方链接和条文位置，不得填写 PDF 页码")
+        if self.source_type in {"txt", "md"} and (self.pdf_page is not None or not self.locator):
+            raise ValueError("文本来源必须提供字符位置，不得填写 PDF 页码")
         return self
 
 
@@ -60,7 +62,7 @@ class LegalChunk(Model):
     item_id: Identifier
     title: Text
     article: Text
-    kind: Literal["recognition", "penalty", "discretion", "provision", "procedure"]
+    kind: Literal["recognition", "penalty", "discretion", "provision", "procedure", "document"]
     region: Text
     domain: Text
     text: Text

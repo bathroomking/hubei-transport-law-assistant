@@ -1,4 +1,4 @@
-# Python 3.12 本地验证：基础依赖 2026-11-02；ingest 分块依赖 2026-11-04。
+# Python 3.12 本地验证：基础依赖 2026-11-02；PDF 结构化解析 2026-11-06。
 Pygments==2.21.0
 annotated-doc==0.0.5
 annotated-types==0.8.0
@@ -35,7 +35,6 @@ jsonpatch==1.41
 jsonpointer==3.8
 langchain-core==1.7.4
 langchain-protocol==0.0.20
-langchain-text-splitters==1.1.3
 langsmith==0.14.17
 orjson==3.13.0
 PyYAML==6.0.3
@@ -55,3 +54,15 @@ chromadb==1.5.9
 
 # multipart 知识库上传接口。
 python-multipart==0.0.33
+
+# PDF 解析及 OCR 的已验证版本；模型文件下载到被忽略的 data/local/。
+docling==2.148.0
+docling-core==2.106.0
+docling-ibm-models==4.0.4
+docling-parse==7.24.2
+rapidocr==3.10.0
+onnxruntime==1.31.1
+torch==2.15.0
+transformers==5.22.1
+# 测试在临时目录生成 PDF，不保留二进制样本。
+reportlab==4.5.1

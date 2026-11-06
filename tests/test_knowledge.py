@@ -15,7 +15,7 @@ from transport_law.llm import Completion
 from transport_law.main import create_app
 
 pytest.importorskip("chromadb")
-pytest.importorskip("langchain_text_splitters")
+pytest.importorskip("docling")
 
 BASE = "/api/v1/knowledge"
 
@@ -238,9 +238,8 @@ def test_size_limit_does_not_reserve_filename(upload_setup):
     "filename,content,error_code",
     [
         ("corrupt.pdf", b"not a pdf", "pdf_read_failed"),
-        ("scan.pdf", "blank", "pdf_needs_ocr"),
-        ("whitespace.pdf", "whitespace", "pdf_needs_ocr"),
-        ("partial-scan.pdf", "partial", "pdf_needs_ocr"),
+        ("blank.pdf", "blank", "no_extractable_text"),
+        ("whitespace.pdf", "whitespace", "no_extractable_text"),
         ("encrypted.pdf", "encrypted", "pdf_encrypted"),
     ],
 )
@@ -252,8 +251,6 @@ def test_bad_document_fails_explicitly_without_publishing(
         content = pdf_bytes("")
     elif content == "whitespace":
         content = pdf_bytes(" \n ")
-    elif content == "partial":
-        content = pdf_bytes("Road permit required.", "")
     elif content == "encrypted":
         content = pdf_bytes(password="fixture-password")
     with TestClient(create_app(settings)) as client:
@@ -268,14 +265,57 @@ def test_bad_document_fails_explicitly_without_publishing(
     assert not embedder.queries
 
 
+def test_intentional_blank_page_does_not_block_other_page_text(upload_setup):
+    settings, embedder = upload_setup
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            f"{BASE}/documents",
+            files={"file": ("blank-separator.pdf", pdf_bytes("", "Road permit required.", ""))},
+        )
+        record = client.get(f"{BASE}/documents/{response.json()['id']}").json()
+        assert record["status"] == "ready", record
+        hits = uploaded_hits(client, "Road permit")
+        assert hits and all(hit["chunk"]["source"]["pdf_page"] == 2 for hit in hits)
+    assert embedder.calls
+
+
+def test_nonblank_page_without_ocr_text_cannot_be_silently_skipped(upload_setup, monkeypatch):
+    from transport_law import ingest
+
+    settings, embedder = upload_setup
+    data = pdf_bytes("Digital page.", "")
+
+    def incompletely_parsed(path):
+        return ingest.LoadedDocument(
+            path.name,
+            hashlib.sha256(data).hexdigest(),
+            "pdf",
+            [
+                ingest.DocumentPage("Digital page.", 1),
+                ingest.DocumentPage("", 2, is_blank=False),
+            ],
+            parser="test-unread-image",
+        )
+
+    monkeypatch.setattr(ingest, "load_document", incompletely_parsed)
+    with TestClient(create_app(settings)) as client:
+        response = client.post(f"{BASE}/documents", files={"file": ("missing-ocr.pdf", data)})
+        record = client.get(f"{BASE}/documents/{response.json()['id']}").json()
+        assert record["status"] == "failed" and record["error_code"] == "pdf_needs_ocr"
+        assert uploaded_hits(client, "Digital page") == []
+    assert not embedder.calls
+
+
 def test_retry_reuses_chunks_and_successful_batches(upload_setup, monkeypatch):
     from transport_law import chunking, knowledge
 
     settings, embedder = upload_setup
     embedder.fail_on_call = 2
-    text = "\n".join(f"第{number}条 Road permit clause {number}." for number in "一二三四五六七")
+    pages = [f"Road permit clause {number}." for number in range(7)]
     with TestClient(create_app(settings)) as client:
-        response = client.post(f"{BASE}/documents", files={"file": ("retry.pdf", pdf_bytes(text))})
+        response = client.post(
+            f"{BASE}/documents", files={"file": ("retry.pdf", pdf_bytes(*pages))}
+        )
         document_id = response.json()["id"]
         before = client.get(f"{BASE}/documents/{document_id}").json()
         assert before["status"] == "failed"
@@ -326,9 +366,11 @@ def test_restart_reads_ready_documents_without_chunking_or_embedding(upload_setu
 def test_partial_failed_vectors_do_not_hide_ready_document(upload_setup):
     settings, embedder = upload_setup
     embedder.fail_on_call = 2
-    text = "\n".join(f"第{number}条 Unfinished permit {number}." for number in "一二三四五六七")
+    pages = [f"Unfinished permit {number}." for number in range(7)]
     with TestClient(create_app(settings)) as client:
-        response = client.post(f"{BASE}/documents", files={"file": ("failed.pdf", pdf_bytes(text))})
+        response = client.post(
+            f"{BASE}/documents", files={"file": ("failed.pdf", pdf_bytes(*pages))}
+        )
         document_id = response.json()["id"]
         assert client.get(f"{BASE}/documents/{document_id}").json()["status"] == "failed"
         embedder.fail_on_call = None
@@ -370,6 +412,9 @@ def test_same_job_cannot_run_or_retry_concurrently(upload_setup, monkeypatch):
                 other_worker.retry(document_id)
             assert error.value.code == "upload_busy"
             assert error.value.status_code == 409
+            with pytest.raises(AppError) as error:
+                other_worker.reprocess(document_id)
+            assert error.value.code == "upload_busy"
             assert other_worker.ready_chunks() == []
         finally:
             release.set()
@@ -465,6 +510,7 @@ def test_unknown_upload_and_chunk_return_404(upload_setup):
     with TestClient(create_app(settings)) as client:
         assert client.get(f"{BASE}/documents/unknown").status_code == 404
         assert client.post(f"{BASE}/documents/unknown/retry").status_code == 404
+        assert client.post(f"{BASE}/documents/unknown/reprocess").status_code == 404
         assert client.get("/api/v1/articles/unknown").status_code == 404
 
 
@@ -590,3 +636,322 @@ print(json.dumps([h.chunk.id for h in hits]))
         check=True,
     )
     assert json.loads(result.stdout) == expected
+
+
+def test_reprocess_rebuilds_vectors_and_preserves_source_and_extraction(upload_setup):
+    from transport_law.knowledge import KnowledgeStore
+
+    settings, embedder = upload_setup
+    original_pdf = pdf_bytes("Reprocess this source without uploading it again.")
+    with TestClient(create_app(settings)) as client:
+        ident = client.post(
+            f"{BASE}/documents", files={"file": ("reprocess.pdf", original_pdf)}
+        ).json()["id"]
+        store = client.app.state.runtime.knowledge
+        before = store._row(ident)
+        folder = settings.knowledge_path / "documents" / ident
+        assert (folder / f"chunks-{before['cache_key']}.jsonl").exists()
+        first_snapshot = folder / f"extraction-{before['cache_key']}.json"
+        assert json.loads(first_snapshot.read_text())["sha256"] == before["sha256"]
+        before_calls = len(embedder.calls)
+        response = client.post(f"{BASE}/documents/{ident}/reprocess")
+        assert response.status_code == 202, response.text
+        after = store._row(ident)
+        assert after["status"] == "ready"
+        assert after["cache_key"] != before["cache_key"]
+        assert after["rebuild_pending"] == 0
+        assert len(embedder.calls) == before_calls + 1
+        assert (folder / "source.pdf").read_bytes() == original_pdf
+        assert first_snapshot.exists()  # 旧引用的提取来源仍可审核。
+        assert not (folder / f"chunks-{before['cache_key']}.jsonl").exists()
+        assert (folder / f"chunks-{after['cache_key']}.jsonl").exists()
+        assert len(store.ready_chunks()) == after["chunk_count"]
+        assert (
+            len(store._collection().get(where={"document_id": ident})["ids"])
+            == after["chunk_count"]
+        )
+        assert uploaded_hits(client, "Reprocess")
+        assert KnowledgeStore(settings).get_document(ident)["status"] == "ready"
+
+
+def test_failed_reparse_preserves_previous_data_until_new_chunks_are_valid(
+    upload_setup, monkeypatch
+):
+    from transport_law import ingest
+    from transport_law.knowledge import KnowledgeStore
+
+    settings, embedder = upload_setup
+    store = KnowledgeStore(settings, embedder)
+    ident = store.receive("parse-failure.pdf", BytesIO(pdf_bytes("Original source.")))["id"]
+    store.process(ident)
+    old_ids = store._collection().get(where={"document_id": ident})["ids"]
+    with store._connect() as conn:
+        old_json = conn.execute(
+            "SELECT chunk_json FROM chunks WHERE document_id = ?", (ident,)
+        ).fetchall()
+    load = ingest.load_document
+
+    def fail_parse(*args, **kwargs):
+        raise AppError("pdf_read_failed", "模拟新解析器失败", 400)
+
+    monkeypatch.setattr(ingest, "load_document", fail_parse)
+    assert store.reprocess(ident)["status"] == "queued"
+    assert store.ready_chunks() == []
+    store.process(ident)
+    assert store.get_document(ident)["status"] == "failed"
+    assert store._row(ident)["rebuild_pending"] == 1
+    assert store._collection().get(where={"document_id": ident})["ids"] == old_ids
+    with store._connect() as conn:
+        assert (
+            conn.execute("SELECT chunk_json FROM chunks WHERE document_id = ?", (ident,)).fetchall()
+            == old_json
+        )
+    monkeypatch.setattr(ingest, "load_document", load)
+    store.retry(ident)
+    store.process(ident)
+    assert store.get_document(ident)["status"] == "ready"
+
+
+def test_reprocess_failure_resumes_new_cached_chunks_without_reparsing(upload_setup, monkeypatch):
+    from transport_law import chunking
+    from transport_law.knowledge import KnowledgeStore
+
+    settings, embedder = upload_setup
+    store = KnowledgeStore(settings, embedder)
+    ident = store.receive("resume-reparse.pdf", BytesIO(pdf_bytes("Retain new cached chunks.")))[
+        "id"
+    ]
+    store.process(ident)
+    store.reprocess(ident)
+    embedder.fail_on_call = len(embedder.calls) + 1
+    store.process(ident)
+    assert store.get_document(ident)["status"] == "failed"
+    assert store._row(ident)["rebuild_pending"] == 0
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("重新解析后的向量失败应复用新版本缓存")
+
+    monkeypatch.setattr(chunking, "build_draft_chunks", unexpected)
+    embedder.fail_on_call = None
+    store.retry(ident)
+    store.process(ident)
+    assert store.get_document(ident)["status"] == "ready"
+
+
+def test_old_ready_vectors_remain_readable_and_explicit_reprocess_upgrades(upload_setup):
+    from transport_law.knowledge import KnowledgeStore
+    from transport_law.vector_store import digest
+
+    settings, embedder = upload_setup
+    store = KnowledgeStore(settings, embedder)
+    ident = store.receive("legacy-ready.pdf", BytesIO(pdf_bytes("Legacy stored text.")))["id"]
+    store.process(ident)
+    legacy_pipeline = "pdf_legal_recursive_v1:800:120"
+    legacy_contract = {**store.contract, "chunking": legacy_pipeline}
+    store._collection().modify(metadata=legacy_contract)
+    with store._connect() as conn:
+        conn.execute(
+            "UPDATE documents SET contract_hash = ? WHERE id = ?",
+            (digest(legacy_contract), ident),
+        )
+        # 模拟真正的旧数据库，而非仅将新 schema 的版本字段改旧。
+        for column in ("pipeline_version", "cache_key", "rebuild_pending"):
+            conn.execute(f"ALTER TABLE documents DROP COLUMN {column}")
+    before_calls = len(embedder.calls)
+    assert store.rank_vectors(store.ready_chunks(), limit=5, query_vector=[1.0, 0.0])
+    assert store.get_document(ident)["pipeline_version"] == legacy_pipeline
+    assert len(embedder.calls) == before_calls
+    store.reprocess(ident)
+    store.process(ident)
+    assert store.get_document(ident)["status"] == "ready"
+    assert store.get_document(ident)["pipeline_version"] != legacy_pipeline
+    assert len(embedder.calls) == before_calls + 1
+
+
+def test_old_pipeline_retry_requires_explicit_reprocess(upload_setup):
+    from transport_law.knowledge import KnowledgeStore
+
+    settings, embedder = upload_setup
+    store = KnowledgeStore(settings, embedder)
+    ident = store.receive("legacy-pending.pdf", BytesIO(pdf_bytes("Unprocessed legacy source.")))[
+        "id"
+    ]
+    store._update(ident, pipeline_version="retired-parser", status="failed")
+    with pytest.raises(AppError) as error:
+        store.retry(ident)
+    assert error.value.code == "processing_version_mismatch"
+    assert not embedder.calls
+    store.reprocess(ident)
+    store.process(ident)
+    assert store.get_document(ident)["status"] == "ready"
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_reprocess_refuses_changed_source_without_touching_ready_data(upload_setup, missing):
+    from transport_law.knowledge import KnowledgeStore
+
+    settings, embedder = upload_setup
+    store = KnowledgeStore(settings, embedder)
+    ident = store.receive("source-integrity.pdf", BytesIO(pdf_bytes("Untampered source.")))["id"]
+    store.process(ident)
+    source = settings.knowledge_path / "documents" / ident / "source.pdf"
+    if missing:
+        source.unlink()
+    else:
+        source.write_bytes(pdf_bytes("Changed original."))
+    with pytest.raises(AppError) as error:
+        store.reprocess(ident)
+    assert error.value.code == ("upload_source_missing" if missing else "upload_source_changed")
+    assert store.get_document(ident)["status"] == "ready"
+    assert len(embedder.calls) == 1
+
+
+def test_interrupted_rebuild_after_vector_removal_can_resume(upload_setup, monkeypatch):
+    from transport_law import chunking
+    from transport_law.knowledge import KnowledgeStore
+
+    class ProcessExited(BaseException):
+        pass
+
+    settings, embedder = upload_setup
+    store = KnowledgeStore(settings, embedder)
+    ident = store.receive("reset-interrupted.pdf", BytesIO(pdf_bytes("Reset interruption.")))["id"]
+    store.process(ident)
+    store.reprocess(ident)
+    save = store._save_chunks
+
+    def interrupt(*args, **kwargs):
+        raise ProcessExited()
+
+    monkeypatch.setattr(store, "_save_chunks", interrupt)
+    with pytest.raises(ProcessExited):
+        store.process(ident)
+    assert store._row(ident)["rebuild_pending"] == 1
+    assert store._collection().get(where={"document_id": ident})["ids"] == []
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("准备好的新分块应在中断后复用")
+
+    monkeypatch.setattr(chunking, "build_draft_chunks", unexpected)
+    monkeypatch.setattr(store, "_save_chunks", save)
+    assert store.get_document(ident)["error_code"] == "job_interrupted"
+    store.retry(ident)
+    store.process(ident)
+    assert store.get_document(ident)["status"] == "ready"
+    assert store._row(ident)["rebuild_pending"] == 0
+    assert store.ready_chunks()
+
+
+@pytest.mark.parametrize("corruption", ["missing_snapshot", "altered_chunk", "invalid_range"])
+def test_retry_rejects_untraceable_cache_before_embedding(upload_setup, corruption):
+    from transport_law.knowledge import KnowledgeStore
+
+    settings, embedder = upload_setup
+    embedder.fail_on_call = 1
+    store = KnowledgeStore(settings, embedder)
+    ident = store.receive("cache-integrity.pdf", BytesIO(pdf_bytes("Traceable source.")))["id"]
+    store.process(ident)
+    assert store.get_document(ident)["status"] == "failed"
+    row = store._row(ident)
+    folder = settings.knowledge_path / "documents" / ident
+    if corruption == "missing_snapshot":
+        (folder / f"extraction-{row['cache_key']}.json").unlink()
+    else:
+        cache = folder / f"chunks-{row['cache_key']}.jsonl"
+        chunks = [json.loads(line) for line in cache.read_text().splitlines()]
+        if corruption == "altered_chunk":
+            chunks[0]["text"] += "Not from source."
+        else:
+            chunks[0]["source"]["locations"][0]["end_index"] = 999999
+        cache.write_text("\n".join(json.dumps(chunk) for chunk in chunks) + "\n")
+    embedder.fail_on_call = None
+    store.retry(ident)
+    store.process(ident)
+    assert store.get_document(ident)["error_code"] == "upload_cache_mismatch"
+    assert len(embedder.calls) == 1
+    assert (folder / "source.pdf").exists()
+
+
+def test_uploaded_text_preserves_exact_snapshot_slices_through_storage_and_api(
+    upload_setup, monkeypatch
+):
+    from pydantic import ValidationError
+
+    from transport_law import ingest
+    from transport_law.schemas import LegalChunk
+
+    settings, _ = upload_setup
+    content = pdf_bytes("The parser output below exercises exact provenance preservation.")
+    canonical = (
+        "  Permit evidence retains leading indentation and trailing spaces.  \n\n"
+        "| Item | Description | Amount |\n"
+        "| --- | --- | --- |\n"
+        + "".join(
+            f"| permit-{number} | " + "retain source whitespace " * 3 + f" | {number}00 |\n"
+            for number in range(1, 11)
+        )
+    )
+
+    def parsed_with_whitespace(path):
+        return ingest.LoadedDocument(
+            path.name,
+            hashlib.sha256(content).hexdigest(),
+            "pdf",
+            [ingest.DocumentPage(canonical, 1)],
+            parser="test-layout-snapshot",
+        )
+
+    monkeypatch.setattr(ingest, "load_document", parsed_with_whitespace)
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            f"{BASE}/documents", files={"file": ("whitespace-evidence.pdf", content)}
+        )
+        assert response.status_code == 202, response.text
+        ident = response.json()["id"]
+        store = client.app.state.runtime.knowledge
+        row = store._row(ident)
+        assert row["status"] == "ready", row
+        folder = settings.knowledge_path / "documents" / ident
+        snapshot = json.loads((folder / f"extraction-{row['cache_key']}.json").read_text())
+        assert snapshot["pages"][0]["text"] == canonical
+        drafts = [
+            json.loads(line)
+            for line in (folder / f"chunks-{row['cache_key']}.jsonl").read_text().splitlines()
+        ]
+        assert any(draft["text"].startswith("  Permit") for draft in drafts)
+        assert any(draft["content_type"] == "table" for draft in drafts)
+        assert all(draft["text"].endswith("\n") for draft in drafts)
+        assert 1 < len(drafts) <= 10
+        with store._connect() as conn:
+            persisted = {
+                record["id"]: json.loads(record["chunk_json"])
+                for record in conn.execute(
+                    "SELECT id, chunk_json FROM chunks WHERE document_id = ?", (ident,)
+                )
+            }
+        retrieved = {
+            hit["chunk"]["id"]: hit["chunk"] for hit in uploaded_hits(client, "permit", 10)
+        }
+        document = client.get(f"/api/v1/documents/{ident}").json()
+        document_chunks = {chunk["id"]: chunk for chunk in document["articles"]}
+        assert set(persisted) == set(retrieved) == set(document_chunks)
+        for draft in drafts:
+            chunk_id = "UP-" + draft["id"].removeprefix("AUTO-")
+            expected = "".join(
+                snapshot["pages"][loc["pdf_page"] - 1]["text"][
+                    loc["start_index"] : loc["end_index"]
+                ]
+                for loc in draft["source"]["locations"]
+            )
+            article = client.get(f"/api/v1/articles/{chunk_id}")
+            assert article.status_code == 200
+            assert (
+                expected
+                == draft["text"]
+                == persisted[chunk_id]["text"]
+                == retrieved[chunk_id]["text"]
+                == document_chunks[chunk_id]["text"]
+                == article.json()["text"]
+            )
+        with pytest.raises(ValidationError):
+            LegalChunk.model_validate({**next(iter(persisted.values())), "text": " \t\n"})

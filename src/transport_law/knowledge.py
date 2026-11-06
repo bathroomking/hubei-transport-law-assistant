@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 import unicodedata
 import uuid
 from collections import Counter
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO
@@ -23,6 +24,12 @@ from transport_law.vector_store import check_contract, chroma_client, chroma_err
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _pipeline_version() -> str:
+    from transport_law.chunking import PIPELINE_VERSION
+
+    return PIPELINE_VERSION
 
 
 def _filename(value: str) -> tuple[str, str, str]:
@@ -63,7 +70,6 @@ class KnowledgeStore:
             "embedding_base_url": self.settings.dashscope_base_url,
             "query_instruction": self.settings.embedding_query_instruction,
             "document_template": "upload-title-heading-text-v1",
-            "chunking": "pdf_legal_recursive_v1:800:120",
             "normalization": "l2",
             "distance": "cosine",
         }
@@ -100,6 +106,20 @@ class KnowledgeStore:
                 CREATE INDEX IF NOT EXISTS chunks_document ON chunks(document_id);
                 """
             )
+            # 分块版本属于文档处理记录，不属于向量空间。旧集合仍可读取，旧任务须显式重解析。
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)")}
+            for name, declaration in {
+                "pipeline_version": "TEXT NOT NULL DEFAULT 'pdf_legal_recursive_v1:800:120'",
+                "cache_key": "TEXT NOT NULL DEFAULT ''",
+                "rebuild_pending": "INTEGER NOT NULL DEFAULT 0",
+            }.items():
+                if name not in columns:
+                    try:
+                        connection.execute(f"ALTER TABLE documents ADD COLUMN {name} {declaration}")
+                    except sqlite3.OperationalError as exc:
+                        # 另一进程可能刚刚完成同一迁移。
+                        if "duplicate column name" not in str(exc):
+                            raise
             yield connection
             connection.commit()
         except BaseException:
@@ -142,7 +162,7 @@ class KnowledgeStore:
         return {
             key: value
             for key, value in row.items()
-            if key not in {"name_key", "contract_hash", "suffix"}
+            if key not in {"name_key", "contract_hash", "suffix", "cache_key", "rebuild_pending"}
         }
 
     def _update(self, ident: str, **values) -> None:
@@ -198,8 +218,9 @@ class KnowledgeStore:
                         connection.execute(
                             """INSERT INTO documents
                             (id, filename, name_key, suffix, status, contract_hash,
-                             sha256, size_bytes, created_at, updated_at)
-                            VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)""",
+                             sha256, size_bytes, created_at, updated_at,
+                             pipeline_version, cache_key)
+                            VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)""",
                             (
                                 ident,
                                 name,
@@ -210,6 +231,8 @@ class KnowledgeStore:
                                 size,
                                 _now(),
                                 _now(),
+                                _pipeline_version(),
+                                uuid.uuid4().hex,
                             ),
                         )
                 except sqlite3.IntegrityError as exc:
@@ -261,10 +284,46 @@ class KnowledgeStore:
                 raise AppError("document_already_ready", "文档已完成入库，不需要重试。", 409)
             if row["contract_hash"] != digest(self.contract):
                 raise AppError(
-                    "vector_index_mismatch", "导入配置已变化，请恢复原模型和切分配置。", 409
+                    "vector_index_mismatch", "导入配置已变化，请核对模型配置后重新解析并入库。", 409
+                )
+            if row["pipeline_version"] != _pipeline_version():
+                raise AppError(
+                    "processing_version_mismatch", "解析方式已更新，请使用重新解析并入库。", 409
                 )
             self._update(ident, status="queued", error_code=None, error_message=None)
         return self.get_document(ident)
+
+    def reprocess(self, ident: str) -> dict:
+        """保留原件，显式重新提取；准备新分块成功前保留旧正文和向量。"""
+        row = self._row(ident)
+        with self._lock(row["id"]):
+            row = self._row(ident)
+            self._verified_source(row)
+            self._update(
+                ident,
+                status="queued",
+                contract_hash=digest(self.contract),
+                pipeline_version=_pipeline_version(),
+                cache_key=uuid.uuid4().hex,
+                rebuild_pending=1,
+                chunk_count=0,
+                embedded_count=0,
+                error_code=None,
+                error_message=None,
+            )
+        return self.get_document(ident)
+
+    def _verified_source(self, row: dict) -> Path:
+        raw = self.path / "documents" / row["id"] / ("source" + row["suffix"])
+        try:
+            checksum = hashlib.sha256(raw.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise AppError(
+                "upload_source_missing", "保存的原文件无法读取，请恢复原件后重试。", 409
+            ) from exc
+        if checksum != row["sha256"]:
+            raise AppError("upload_source_changed", "保存的原文件已改变，停止导入。", 409)
+        return raw
 
     def _collection(self, *, create: bool = False):
         with chroma_errors():
@@ -295,53 +354,92 @@ class KnowledgeStore:
         from transport_law.ingest import load_document
 
         folder = self.path / "documents" / row["id"]
-        raw = folder / ("source" + row["suffix"])
-        if hashlib.sha256(raw.read_bytes()).hexdigest() != row["sha256"]:
-            raise AppError("upload_source_changed", "保存的原文件已改变，停止导入。", 409)
-        cache = folder / "chunks.jsonl"
+        raw = self._verified_source(row)
+        if row["pipeline_version"] != _pipeline_version() or not row["cache_key"]:
+            raise AppError("processing_version_mismatch", "分块缓存版本已更新，请重新解析。", 409)
+        cache = folder / f"chunks-{row['cache_key']}.jsonl"
+        extraction = folder / f"extraction-{row['cache_key']}.json"
         if cache.exists():
             drafts = [
                 DraftChunk.model_validate_json(line) for line in cache.read_text().splitlines()
             ]
         else:
             loaded = replace(load_document(raw), file=row["filename"])
-            if any(not page.text.strip() for page in loaded.pages):
+            if any(not page.text.strip() and not page.is_blank for page in loaded.pages):
                 raise AppError(
-                    "pdf_needs_ocr", "PDF 含无法提取文字的页面，请先做 OCR 后再导入。", 400
+                    "pdf_needs_ocr", "PDF 有非空白页面未能提取文字，请检查原文件或 OCR 结果。", 400
                 )
             drafts = build_draft_chunks(
                 loaded, ChunkingOptions(), document_id=row["id"], title=Path(row["filename"]).stem
             )
             if not drafts:
                 raise AppError("no_extractable_text", "文件中没有可切分的文字。", 400)
-            temporary = folder / "chunks.part"
+            temporary = extraction.with_suffix(".part")
+            with temporary.open("w", encoding="utf-8") as output:
+                json.dump(asdict(loaded), output, ensure_ascii=False)
+                output.flush()
+                os.fsync(output.fileno())
+            temporary.replace(extraction)
+            temporary = cache.with_suffix(".part")
             with temporary.open("w", encoding="utf-8") as output:
                 for draft in drafts:
                     output.write(draft.model_dump_json() + "\n")
                 output.flush()
                 os.fsync(output.fileno())
             temporary.replace(cache)
+        try:
+            snapshot = json.loads(extraction.read_text(encoding="utf-8"))
+            page_text = {page["pdf_page"]: page["text"] for page in snapshot["pages"]}
+            if snapshot["sha256"] != row["sha256"]:
+                raise ValueError("source snapshot mismatch")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise AppError(
+                "upload_cache_mismatch", "分块来源快照缺失或不一致，请重新解析。", 409
+            ) from exc
         chunks = []
         for number, draft in enumerate(drafts, 1):
             if draft.document_id != row["id"] or draft.source.sha256 != row["sha256"]:
                 raise AppError("upload_cache_mismatch", "已存分块与原文件不一致。", 409)
-            locator = "；".join(
+            if draft.chunking != ChunkingOptions():
+                raise AppError(
+                    "processing_version_mismatch", "缓存切分参数已变化，请重新解析。", 409
+                )
+            try:
+                if any(
+                    not 0 <= loc.start_index < loc.end_index <= len(page_text[loc.pdf_page])
+                    for loc in draft.source.locations
+                ):
+                    raise ValueError("invalid source range")
+                source_text = "".join(
+                    page_text[loc.pdf_page][loc.start_index : loc.end_index]
+                    for loc in draft.source.locations
+                )
+                if source_text != draft.text or draft.source.parser != snapshot["parser"]:
+                    raise ValueError("chunk source mismatch")
+            except (KeyError, TypeError, ValueError) as exc:
+                raise AppError(
+                    "upload_cache_mismatch", "分块不能回查提取原文，请重新解析。", 409
+                ) from exc
+            locator = f"片段序号 {number}；" + "；".join(
                 f"PDF 第 {loc.pdf_page} 页，字符 [{loc.start_index}, {loc.end_index})"
                 for loc in draft.source.locations
             )
+            parser = getattr(draft.source, "parser", None)
+            if parser:
+                locator += f"；解析器 {parser}；提取快照 {row['cache_key']}"
             chunks.append(
                 LegalChunk(
                     id="UP-" + draft.id.removeprefix("AUTO-"),
                     document_id=row["id"],
                     version_id=draft.version_id,
-                    item_id=row["id"],
+                    item_id=getattr(draft, "parent_id", None) or row["id"],
                     title=draft.title,
                     article=draft.heading or f"片段 {number}",
                     kind="document",
                     region="未标注",
                     domain="上传资料",
                     text=draft.text,
-                    search_text=draft.title + "\n" + draft.text,
+                    search_text="\n".join(filter(None, [draft.title, draft.heading, draft.text])),
                     source=Source(
                         document_title=draft.title,
                         file=row["filename"],
@@ -356,12 +454,32 @@ class KnowledgeStore:
             )
         if not chunks:
             raise AppError("no_extractable_text", "文件中没有可切分的文字。", 400)
+        return chunks
+
+    def _save_chunks(self, ident: str, chunks: list[LegalChunk], *, rebuild: bool) -> None:
         with self._connect() as connection:
+            if rebuild:
+                connection.execute("DELETE FROM chunks WHERE document_id = ?", (ident,))
             connection.executemany(
                 "INSERT OR REPLACE INTO chunks (id, document_id, chunk_json) VALUES (?, ?, ?)",
-                [(chunk.id, row["id"], chunk.model_dump_json()) for chunk in chunks],
+                [(chunk.id, ident, chunk.model_dump_json()) for chunk in chunks],
             )
-        return chunks
+            connection.execute(
+                "UPDATE documents SET rebuild_pending = 0, chunk_count = ? WHERE id = ?",
+                (len(chunks), ident),
+            )
+
+    def _clean_superseded_caches(self, row: dict) -> None:
+        folder = self.path / "documents" / row["id"]
+        keep = {f"chunks-{row['cache_key']}.jsonl", f"extraction-{row['cache_key']}.json"}
+        # 原件及来源提取快照不在清理范围内；仅清理不再使用的分块缓存与未完成临时文件。
+        for pattern in ("chunks*.jsonl", "chunks*.part", "extraction-*.part"):
+            for path in folder.glob(pattern):
+                if path.name not in keep:
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass  # 清理失败不能把已完整入库的文档改成 failed。
 
     def process(self, ident: str) -> None:
         row = self._row(ident)
@@ -374,14 +492,24 @@ class KnowledgeStore:
                 try:
                     if row["contract_hash"] != digest(self.contract):
                         raise AppError("vector_index_mismatch", "导入配置与已保存任务不一致。", 409)
+                    if row["pipeline_version"] != _pipeline_version():
+                        raise AppError(
+                            "processing_version_mismatch", "解析方式已更新，请重新解析并入库。", 409
+                        )
                     chunks = self._chunks(row)
-                    self._update(ident, chunk_count=len(chunks))
                     # 串行写同一集合；失败后已保存的批次保持不变，不锁住 SQLite 网络事务。
                     with self._lock(
                         "collection-" + digest(str(self.settings.chroma_path)), blocking=True
                     ):
+                        rebuild = bool(row["rebuild_pending"])
+                        if rebuild:
+                            # 新分块及来源验证完毕才移除旧向量；pending 标记使中断后可幂等重做。
+                            with chroma_errors():
+                                self._collection(create=True).delete(where={"document_id": ident})
+                        self._save_chunks(ident, chunks, rebuild=rebuild)
                         self._embed_chunks(ident, chunks)
                     self._update(ident, status="ready", embedded_count=len(chunks))
+                    self._clean_superseded_caches(row)
                 except AppError as exc:
                     self._update(
                         ident, status="failed", error_code=exc.code, error_message=exc.message

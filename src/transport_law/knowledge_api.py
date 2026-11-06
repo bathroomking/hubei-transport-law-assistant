@@ -16,6 +16,7 @@ class DocumentStatus(BaseModel):
     embedded_count: int = Field(ge=0)
     error_code: str | None = None
     error_message: str | None = None
+    pipeline_version: str = "pdf_legal_recursive_v1:800:120"
 
 
 @router.post("/documents", response_model=DocumentStatus, status_code=202)
@@ -48,5 +49,14 @@ def retry_document(document_id: str, request: Request, background_tasks: Backgro
     """继续失败或被中断的导入，复用已保存的分块和成功向量批次。"""
     store = request.app.state.runtime.knowledge
     result = store.retry(document_id)
+    background_tasks.add_task(store.process, document_id)
+    return result
+
+
+@router.post("/documents/{document_id}/reprocess", response_model=DocumentStatus, status_code=202)
+def reprocess_document(document_id: str, request: Request, background_tasks: BackgroundTasks):
+    """用当前解析方式重建分块和向量；完成前该文档暂不参与检索，原件始终保留。"""
+    store = request.app.state.runtime.knowledge
+    result = store.reprocess(document_id)
     background_tasks.add_task(store.process, document_id)
     return result

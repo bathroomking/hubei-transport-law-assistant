@@ -113,7 +113,7 @@ def test_upload_is_visible_to_same_runtime_and_citations_without_restart(online_
             files={
                 "file": (
                     "施工说明.pdf",
-                    pdf_bytes("第一条 施工许可需要审批。\n第二条 施工许可应留存记录。"),
+                    pdf_bytes("施工许可需要审批。", "施工许可应留存记录。"),
                 )
             },
         )
@@ -169,8 +169,8 @@ def test_queued_failed_chunks_and_partial_vectors_are_excluded_from_answer(onlin
     store = KnowledgeStore(settings)
     queued = store.receive("queued.pdf", BytesIO(pdf_bytes("Unprocessed permit.")))["id"]
     embedder.fail_on_call = 2
-    body = "\n".join(f"第{i}条 Failed permit {i}." for i in "一二三四五六")
-    failed = store.receive("failed.pdf", BytesIO(pdf_bytes(body)))["id"]
+    pages = [f"Failed permit {i}." for i in range(6)]
+    failed = store.receive("failed.pdf", BytesIO(pdf_bytes(*pages)))["id"]
     store.process(failed)
     assert store.get_document(failed)["status"] == "failed"
     assert store.get_document(failed)["embedded_count"] == 2

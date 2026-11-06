@@ -20,11 +20,13 @@ class LawDocument(Model):
 
 
 def _reading_order(article: LegalChunk) -> tuple:
-    # 片段 ID 为哈希，按入库时保存的页码和字符位置恢复阅读顺序。
+    # 表格续块会重复表头，首个字符位置可能相同；新记录用生成顺序，旧记录回退到字符位置。
+    sequence = re.search(r"片段序号 (\d+)", article.source.locator or "")
     position = re.search(r"字符 \[(\d+),", article.source.locator or "")
+    order = sequence or position
     return (
         article.source.pdf_page,
-        int(position.group(1)) if position else float("inf"),
+        int(order.group(1)) if order else float("inf"),
         article.id,
     )
 

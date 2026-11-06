@@ -566,6 +566,12 @@
         if (record.status === "queued") control.title = "任务长时间等待时可尝试继续；正在执行的任务不会重复启动。";
         actions.append(control);
       }
+      if (record.status === "ready" || record.status === "failed" || record.status === "queued") {
+        const rebuild = rowAction("重新解析并入库", record, "reprocess", () => retryDocument(record, true));
+        rebuild.disabled = retrying.has(record.id);
+        rebuild.title = "使用当前解析方式重新整理原文件并生成向量；完成前该文档暂不参与问答，会使用向量服务额度。";
+        actions.append(rebuild);
+      }
       if (actions.childElementCount) card.append(actions);
       documentList.append(card);
     }
@@ -689,15 +695,16 @@
     }
   });
 
-  async function retryDocument(record) {
+  async function retryDocument(record, reprocess = false) {
     if (retrying.has(record.id)) return;
     cancelLibraryRead();
     retrying.add(record.id);
     renderDocuments();
     try {
-      const updated = await request(`${knowledgePath}/${encodeURIComponent(record.id)}/retry`, { method: "POST" });
+      const action = reprocess ? "reprocess" : "retry";
+      const updated = await request(`${knowledgePath}/${encodeURIComponent(record.id)}/${action}`, { method: "POST" });
       upsertDocument(updated);
-      uploadFeedback(`“${record.filename}”已重新安排入库，处理结果将显示在列表中。`);
+      uploadFeedback(`“${record.filename}”已${reprocess ? "安排重新解析，完成前暂不参与问答" : "重新安排入库"}，处理结果将显示在列表中。`);
     } catch (error) {
       uploadFeedback(error.message + (!error.status ? " 重试结果尚未确认，请刷新列表查看状态。" : ""), true);
     } finally {

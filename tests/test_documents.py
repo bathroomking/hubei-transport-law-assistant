@@ -50,6 +50,26 @@ def test_versions_are_selected_and_never_merged(repository):
     assert load_law_document(repo, "upload-fixture", current.version_id).articles == [current]
 
 
+def test_repeated_table_headers_do_not_scramble_reading_order(repository):
+    base = repository.all_chunks[0]
+    chunks = [
+        base.model_copy(
+            update={
+                "id": ident,
+                "source": base.source.model_copy(
+                    update={
+                        "locator": f"片段序号 {number}；PDF 第 1 页，字符 [0, 20)；"
+                        f"PDF 第 1 页，字符 [{number * 100}, {number * 100 + 40})",
+                    }
+                ),
+            }
+        )
+        for ident, number in [("UP-a", 3), ("UP-z", 1), ("UP-b", 2)]
+    ]
+    document = load_law_document(ChunkRepository(chunks), base.document_id)
+    assert [chunk.id for chunk in document.articles] == ["UP-z", "UP-b", "UP-a"]
+
+
 @pytest.mark.parametrize(
     "document_id, version, code",
     [

@@ -52,7 +52,8 @@ class LegalChunk(Model):
     kind: Literal["recognition", "penalty", "discretion", "provision", "procedure", "document"]
     region: Text
     domain: Text
-    text: Text
+    # 正文须与来源切片完全一致；缩进与末尾换行也是解析文本的一部分。
+    text: Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
     search_text: Text
     aliases: list[Text] = Field(default_factory=list)
     document_aliases: list[Text] = Field(default_factory=list)

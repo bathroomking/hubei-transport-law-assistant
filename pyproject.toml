@@ -18,9 +18,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10", "ruff>=0.9,<1"]
-pdf = ["pypdf>=5,<7"]
-ingest = ["pypdf>=5,<7", "langchain-text-splitters>=1.0,<2"]
+dev = ["pytest>=8,<10", "ruff>=0.9,<1", "reportlab>=4.5,<5"]
+pdf = [
+  "pypdf>=5,<7", "docling[rapidocr]==2.148.0", "rapidocr==3.10.0",
+  "docling-core==2.106.0", "docling-ibm-models==4.0.4",
+]
+ingest = [
+  "pypdf>=5,<7", "docling[rapidocr]==2.148.0", "rapidocr==3.10.0",
+  "docling-core==2.106.0", "docling-ibm-models==4.0.4",
+]
 vectors = ["chromadb>=1.5,<2"]
 
 [project.scripts]

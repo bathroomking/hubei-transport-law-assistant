@@ -20,7 +20,7 @@ class DocumentStatus(BaseModel):
 
 @router.post("/documents", response_model=DocumentStatus, status_code=202)
 def upload_document(file: UploadFile, request: Request, background_tasks: BackgroundTasks):
-    """上传 PDF、UTF-8 TXT 或 Markdown。同名返回 409；202 只表示接收成功。
+    """上传 PDF。同名返回 409；202 只表示接收成功。
 
     处理状态通过 GET /documents/{id} 查询；只有 ready 文档进入检索。
     """

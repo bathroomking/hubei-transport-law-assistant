@@ -47,10 +47,10 @@
     <section id="view-knowledge" aria-labelledby="knowledge-title" hidden>
       <div class="intro library-intro"><span class="eyebrow">补充资料 · 自动入库 · 统一问答</span><h1 id="knowledge-title">把需要参考的资料<br><span>加入问答资料库。</span></h1><p>上传后自动提取和整理文字，入库完成即可参与下一次提问。</p></div>
       <form id="upload-form" class="upload-card" enctype="multipart/form-data">
-        <div id="drop-zone" class="drop-zone"><span class="upload-emblem"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg></span><h2>拖拽一份资料到这里</h2><p id="file-types">PDF、TXT、Markdown · <span id="upload-limit">正在读取文件大小限制</span></p><label class="button secondary file-picker">选择文件<input id="upload-file" name="file" type="file" accept=".pdf,.txt,.md,.markdown" class="visually-hidden" aria-label="选择资料文件" aria-describedby="file-types upload-note"></label></div>
+        <div id="drop-zone" class="drop-zone"><span class="upload-emblem"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg></span><h2>拖拽一份资料到这里</h2><p id="file-types">仅支持 PDF · <span id="upload-limit">正在读取文件大小限制</span></p><label class="button secondary file-picker">选择文件<input id="upload-file" name="file" type="file" accept=".pdf" class="visually-hidden" aria-label="选择资料文件" aria-describedby="file-types upload-note"></label></div>
         <div id="selected-file" class="selected-file" hidden><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg><div><strong id="selected-filename"></strong><span id="selected-size"></span></div><button id="clear-file" class="icon-button" type="button" aria-label="移除待上传文件"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></div>
         <div class="upload-toolbar"><p>一次上传一份资料；同名文件不会覆盖。</p><button id="submit-upload" type="submit" class="button primary" disabled><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg><span>上传并入库</span></button></div>
-        <p id="upload-note" class="upload-note">入库会将文档文字发送至阿里云百炼生成向量，并使用 API 额度。TXT / Markdown 请使用 UTF-8 编码；扫描版 PDF 需先识别为可提取文字的文档。</p>
+        <p id="upload-note" class="upload-note">入库会将文档文字发送至阿里云百炼生成向量，并使用 API 额度。PDF 须可提取文字；扫描件请先完成 OCR。</p>
       </form>
       <div id="upload-feedback" class="upload-feedback" role="status" aria-live="polite" hidden></div>
       <section class="library-section" aria-labelledby="library-title">

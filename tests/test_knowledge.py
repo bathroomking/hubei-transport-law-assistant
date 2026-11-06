@@ -6,6 +6,7 @@ from threading import Barrier, Event
 
 import pytest
 from fastapi.testclient import TestClient
+from pdf_fixtures import pdf_bytes
 from pydantic import SecretStr
 
 from transport_law.errors import AppError
@@ -69,38 +70,11 @@ def upload_setup(settings, tmp_path, monkeypatch):
     return configured, embedder
 
 
-def pdf_bytes(*, text=True, blank_second_page=False):
-    from pypdf import PdfWriter
-    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
-
-    writer = PdfWriter()
-    page = writer.add_blank_page(width=612, height=792)
-    if text:
-        font = DictionaryObject(
-            {
-                NameObject("/Type"): NameObject("/Font"),
-                NameObject("/Subtype"): NameObject("/Type1"),
-                NameObject("/BaseFont"): NameObject("/Helvetica"),
-            }
-        )
-        page[NameObject("/Resources")] = DictionaryObject(
-            {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})}
-        )
-        stream = DecodedStreamObject()
-        stream.set_data(b"BT /F1 12 Tf 72 720 Td (Road construction requires permission.) Tj ET")
-        page[NameObject("/Contents")] = writer._add_object(stream)
-    if blank_second_page:
-        writer.add_blank_page(width=612, height=792)
-    output = BytesIO()
-    writer.write(output)
-    return output.getvalue()
-
-
-@pytest.mark.parametrize("extension", ["txt", "md", "markdown", "pdf"])
-def test_upload_all_formats_becomes_searchable_with_real_source(upload_setup, extension):
+@pytest.mark.parametrize("extension", ["pdf", "PDF"])
+def test_pdf_upload_becomes_searchable_with_real_source(upload_setup, extension):
     settings, embedder = upload_setup
     filename = f"知识文档.{extension}"
-    content = pdf_bytes() if extension == "pdf" else "# 道路施工\n施工前应办理许可。".encode()
+    content = pdf_bytes("第一条 施工前应办理许可。")
     with TestClient(create_app(settings)) as client:
         response = client.post(f"{BASE}/documents", files={"file": (filename, content)})
         assert response.status_code == 202, response.text
@@ -118,8 +92,8 @@ def test_upload_all_formats_becomes_searchable_with_real_source(upload_setup, ex
         assert chunk["source"]["verification_status"] == "pending"
         assert chunk["source"]["official_url"] is None
         assert chunk["source"]["locator"]
-        assert chunk["source"]["pdf_page"] == (1 if extension == "pdf" else None)
-        assert chunk["source"]["source_type"] == ("md" if extension == "markdown" else extension)
+        assert chunk["source"]["pdf_page"] == 1
+        assert chunk["source"]["source_type"] == "pdf"
         assert client.get(f"/api/v1/articles/{chunk['id']}").json() == chunk
         from transport_law.vector_store import chroma_client
 
@@ -135,13 +109,14 @@ def test_duplicate_name_is_rejected_without_reprocessing_even_after_restart(uplo
         with TestClient(create_app(settings)) as client:
             if run == 0:
                 response = client.post(
-                    f"{BASE}/documents", files={"file": ("Road.txt", b"Road permit required.")}
+                    f"{BASE}/documents",
+                    files={"file": ("Road.pdf", pdf_bytes("Road permit required."))},
                 )
                 assert response.status_code == 202
             before = len(embedder.calls)
             # 同名判断忽略大小写与 Unicode 兼容字符差异，不以正文变化绕过。
             response = client.post(
-                f"{BASE}/documents", files={"file": ("ＲＯＡＤ.TXT", b"Changed body.")}
+                f"{BASE}/documents", files={"file": ("ＲＯＡＤ.PDF", pdf_bytes("Changed body."))}
             )
             assert response.status_code == 409
             assert response.json()["error"]["code"] == "duplicate_filename"
@@ -154,8 +129,8 @@ def test_new_document_only_embeds_new_chunks_and_is_visible_without_restart(uplo
     with TestClient(create_app(settings)) as client:
         assert client.get("/health").json()["retrieval_backend"] == "hybrid"
         assert uploaded_hits(client, "document") == []
-        for name, text in [("one.txt", b"First document."), ("two.md", b"Second document.")]:
-            response = client.post(f"{BASE}/documents", files={"file": (name, text)})
+        for name, text in [("one.pdf", "First document."), ("two.pdf", "Second document.")]:
+            response = client.post(f"{BASE}/documents", files={"file": (name, pdf_bytes(text))})
             assert response.status_code == 202
             # 查询后再追加，BM25 不得一直使用第一次请求的过期快照。
             hits = uploaded_hits(client, "document")
@@ -165,8 +140,8 @@ def test_new_document_only_embeds_new_chunks_and_is_visible_without_restart(uplo
         assert len(embedder.calls) == 2
         assert len(embedder.successful_texts) == 2
         assert {hit["chunk"]["source"]["file"] for hit in uploaded_hits(client, "document")} == {
-            "one.txt",
-            "two.md",
+            "one.pdf",
+            "two.pdf",
         }
         assert len(embedder.queries) == 3
 
@@ -175,7 +150,8 @@ def test_names_have_no_implicit_reserved_corpus_files(upload_setup):
     settings, embedder = upload_setup
     with TestClient(create_app(settings)) as client:
         response = client.post(
-            f"{BASE}/documents", files={"file": ("legal_chunks.txt", b"New uploaded document.")}
+            f"{BASE}/documents",
+            files={"file": ("legal_chunks.pdf", pdf_bytes("New uploaded document."))},
         )
         assert response.status_code == 202
         record = client.get(f"{BASE}/documents/{response.json()['id']}").json()
@@ -193,7 +169,7 @@ def test_concurrent_same_name_has_one_durable_winner(upload_setup):
         store = KnowledgeStore(settings)
         barrier.wait(timeout=10)
         try:
-            return store.receive("same.txt", BytesIO(b"Same document."))["id"]
+            return store.receive("same.pdf", BytesIO(pdf_bytes("Same document.")))["id"]
         except AppError as exc:
             assert exc.code == "duplicate_filename"
             assert exc.status_code == 409
@@ -206,7 +182,7 @@ def test_concurrent_same_name_has_one_durable_winner(upload_setup):
     assert not embedder.calls
 
 
-@pytest.mark.parametrize("filename", ["../bad.txt", "folder/bad.md", "C:\\bad.txt", "bad\n.txt"])
+@pytest.mark.parametrize("filename", ["../bad.pdf", "folder/bad.pdf", "C:\\bad.pdf", "bad\n.pdf"])
 def test_unsafe_filename_never_creates_document(upload_setup, filename):
     from transport_law.knowledge import KnowledgeStore
 
@@ -219,52 +195,73 @@ def test_unsafe_filename_never_creates_document(upload_setup, filename):
     assert not embedder.calls
 
 
-@pytest.mark.parametrize("filename,content", [("bad.docx", b"text"), ("empty.txt", b"")])
-def test_invalid_upload_is_rejected_before_queueing(upload_setup, filename, content):
+@pytest.mark.parametrize("extension", ["txt", "md", "markdown", "docx"])
+def test_non_pdf_upload_is_rejected_before_queueing(upload_setup, extension):
     settings, embedder = upload_setup
     with TestClient(create_app(settings)) as client:
-        response = client.post(f"{BASE}/documents", files={"file": (filename, content)})
-        assert response.status_code in (400, 415)
+        response = client.post(
+            f"{BASE}/documents", files={"file": (f"document.{extension}", pdf_bytes())}
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "unsupported_document"
+        assert client.get(f"{BASE}/documents").json() == []
+    assert not embedder.calls
+
+
+def test_empty_upload_is_rejected_before_queueing(upload_setup):
+    settings, embedder = upload_setup
+    with TestClient(create_app(settings)) as client:
+        response = client.post(f"{BASE}/documents", files={"file": ("empty.pdf", b"")})
+        assert response.status_code == 400
         assert client.get(f"{BASE}/documents").json() == []
     assert not embedder.calls
 
 
 def test_size_limit_does_not_reserve_filename(upload_setup):
     settings, embedder = upload_setup
-    settings = settings.model_copy(update={"upload_max_bytes": 8})
+    content = pdf_bytes("Valid small PDF.")
+    settings = settings.model_copy(update={"upload_max_bytes": len(content)})
     with TestClient(create_app(settings)) as client:
         # The frontend must display and validate the same configured limit as receive().
-        assert client.get("/health").json()["upload_max_bytes"] == 8
-        too_large = client.post(f"{BASE}/documents", files={"file": ("small.txt", b"a" * 9)})
+        assert client.get("/health").json()["upload_max_bytes"] == len(content)
+        too_large = client.post(f"{BASE}/documents", files={"file": ("small.pdf", content + b"a")})
         assert too_large.status_code == 413
         assert client.get(f"{BASE}/documents").json() == []
-        valid = client.post(f"{BASE}/documents", files={"file": ("small.txt", b"hello")})
+        valid = client.post(f"{BASE}/documents", files={"file": ("small.pdf", content)})
         assert valid.status_code == 202
+        record = client.get(f"{BASE}/documents/{valid.json()['id']}").json()
+        assert record["status"] == "ready"
     assert len(embedder.calls) == 1
 
 
 @pytest.mark.parametrize(
-    "filename,content",
+    "filename,content,error_code",
     [
-        ("encoding.txt", b"\xff\xfe\x00"),
-        ("whitespace.md", b" \n\t"),
-        ("corrupt.pdf", b"not a pdf"),
-        ("scan.pdf", None),
-        ("partial-scan.pdf", "partial"),
+        ("corrupt.pdf", b"not a pdf", "pdf_read_failed"),
+        ("scan.pdf", "blank", "pdf_needs_ocr"),
+        ("whitespace.pdf", "whitespace", "pdf_needs_ocr"),
+        ("partial-scan.pdf", "partial", "pdf_needs_ocr"),
+        ("encrypted.pdf", "encrypted", "pdf_encrypted"),
     ],
 )
-def test_bad_document_fails_explicitly_without_publishing(upload_setup, filename, content):
+def test_bad_document_fails_explicitly_without_publishing(
+    upload_setup, filename, content, error_code
+):
     settings, embedder = upload_setup
-    if content is None:
-        content = pdf_bytes(text=False)
+    if content == "blank":
+        content = pdf_bytes("")
+    elif content == "whitespace":
+        content = pdf_bytes(" \n ")
     elif content == "partial":
-        content = pdf_bytes(blank_second_page=True)
+        content = pdf_bytes("Road permit required.", "")
+    elif content == "encrypted":
+        content = pdf_bytes(password="fixture-password")
     with TestClient(create_app(settings)) as client:
         response = client.post(f"{BASE}/documents", files={"file": (filename, content)})
         assert response.status_code == 202
         record = client.get(f"{BASE}/documents/{response.json()['id']}").json()
         assert record["status"] == "failed"
-        assert record["error_code"]
+        assert record["error_code"] == error_code
         assert record["error_message"]
         assert uploaded_hits(client, "任何内容") == []
     assert not embedder.calls
@@ -276,9 +273,9 @@ def test_retry_reuses_chunks_and_successful_batches(upload_setup, monkeypatch):
 
     settings, embedder = upload_setup
     embedder.fail_on_call = 2
-    text = "\n".join(f"# Section {number}\nRoad permit clause {number}." for number in range(7))
+    text = "\n".join(f"第{number}条 Road permit clause {number}." for number in "一二三四五六七")
     with TestClient(create_app(settings)) as client:
-        response = client.post(f"{BASE}/documents", files={"file": ("retry.md", text.encode())})
+        response = client.post(f"{BASE}/documents", files={"file": ("retry.pdf", pdf_bytes(text))})
         document_id = response.json()["id"]
         before = client.get(f"{BASE}/documents/{document_id}").json()
         assert before["status"] == "failed"
@@ -309,7 +306,7 @@ def test_restart_reads_ready_documents_without_chunking_or_embedding(upload_setu
     settings, embedder = upload_setup
     with TestClient(create_app(settings)) as client:
         response = client.post(
-            f"{BASE}/documents", files={"file": ("persist.txt", b"Persistent text.")}
+            f"{BASE}/documents", files={"file": ("persist.pdf", pdf_bytes("Persistent text."))}
         )
         document_id = response.json()["id"]
         expected = client.get(f"{BASE}/documents/{document_id}").json()
@@ -329,21 +326,22 @@ def test_restart_reads_ready_documents_without_chunking_or_embedding(upload_setu
 def test_partial_failed_vectors_do_not_hide_ready_document(upload_setup):
     settings, embedder = upload_setup
     embedder.fail_on_call = 2
-    text = "\n".join(f"# Section {number}\nUnfinished permit {number}." for number in range(7))
+    text = "\n".join(f"第{number}条 Unfinished permit {number}." for number in "一二三四五六七")
     with TestClient(create_app(settings)) as client:
-        response = client.post(f"{BASE}/documents", files={"file": ("failed.md", text.encode())})
+        response = client.post(f"{BASE}/documents", files={"file": ("failed.pdf", pdf_bytes(text))})
         document_id = response.json()["id"]
         assert client.get(f"{BASE}/documents/{document_id}").json()["status"] == "failed"
         embedder.fail_on_call = None
         assert (
             client.post(
-                f"{BASE}/documents", files={"file": ("ready.txt", b"Completed permit document.")}
+                f"{BASE}/documents",
+                files={"file": ("ready.pdf", pdf_bytes("Completed permit document."))},
             ).status_code
             == 202
         )
         hits = uploaded_hits(client, "permit", top_k=1)
         assert len(hits) == 1
-        assert hits[0]["chunk"]["source"]["file"] == "ready.txt"
+        assert hits[0]["chunk"]["source"]["file"] == "ready.pdf"
 
 
 def test_same_job_cannot_run_or_retry_concurrently(upload_setup, monkeypatch):
@@ -351,7 +349,7 @@ def test_same_job_cannot_run_or_retry_concurrently(upload_setup, monkeypatch):
 
     settings, embedder = upload_setup
     store = KnowledgeStore(settings)
-    document_id = store.receive("running.txt", BytesIO(b"One running task."))["id"]
+    document_id = store.receive("running.pdf", BytesIO(pdf_bytes("One running task.")))["id"]
     started, release = Event(), Event()
     original = embedder.embed_documents
 
@@ -391,7 +389,9 @@ def test_interrupted_task_requires_explicit_retry_and_reuses_saved_chunks(
 
     settings, embedder = upload_setup
     store = KnowledgeStore(settings)
-    document_id = store.receive("interrupted.txt", BytesIO(b"Recover after interruption."))["id"]
+    document_id = store.receive(
+        "interrupted.pdf", BytesIO(pdf_bytes("Recover after interruption."))
+    )["id"]
     original = embedder.embed_documents
 
     def interrupt_before_vector_saved(texts):
@@ -445,7 +445,7 @@ def test_uploaded_qa_uses_stored_sources_and_rejects_invented_citations(upload_s
         assert client.app.state.runtime.repository.knowledge is client.app.state.runtime.knowledge
         assert (
             client.post(
-                f"{BASE}/documents", files={"file": ("source.txt", "施工前需办理许可。".encode())}
+                f"{BASE}/documents", files={"file": ("source.pdf", pdf_bytes("施工前需办理许可。"))}
             ).status_code
             == 202
         )
@@ -475,8 +475,8 @@ def test_ready_snapshot_checks_each_document_without_reprocessing(upload_setup, 
     settings, embedder = upload_setup
     store = KnowledgeStore(settings)
     identifiers = []
-    for name in ("one.txt", "two.txt"):
-        ident = store.receive(name, BytesIO(b"Stored document text."))["id"]
+    for name in ("one.pdf", "two.pdf"):
+        ident = store.receive(name, BytesIO(pdf_bytes("Stored document text.")))["id"]
         store.process(ident)
         assert store.get_document(ident)["status"] == "ready"
         identifiers.append(ident)
@@ -507,7 +507,7 @@ def test_uploaded_index_rejects_incompatible_vector_configuration(upload_setup, 
 
     settings, embedder = upload_setup
     store = KnowledgeStore(settings, embedder)
-    ident = store.receive("contract.txt", BytesIO(b"Stored configuration."))["id"]
+    ident = store.receive("contract.pdf", BytesIO(pdf_bytes("Stored configuration.")))["id"]
     store.process(ident)
     other = KnowledgeStore(settings.model_copy(update=update), embedder)
     with pytest.raises(AppError) as exc:
@@ -516,12 +516,34 @@ def test_uploaded_index_rejects_incompatible_vector_configuration(upload_setup, 
     assert not embedder.queries
 
 
+def test_retired_chunking_contract_cannot_process_or_retry_cached_upload(upload_setup):
+    from transport_law.knowledge import KnowledgeStore
+    from transport_law.vector_store import digest
+
+    settings, embedder = upload_setup
+    store = KnowledgeStore(settings, embedder)
+    ident = store.receive("old-contract.pdf", BytesIO(pdf_bytes()))["id"]
+    old_contract = {**store.contract, "chunking": "legal_recursive_v1:800:120"}
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE documents SET contract_hash = ? WHERE id = ?", (digest(old_contract), ident)
+        )
+    store.process(ident)
+    record = store.get_document(ident)
+    assert record["status"] == "failed" and record["error_code"] == "vector_index_mismatch"
+    with pytest.raises(AppError) as exc:
+        store.retry(ident)
+    assert exc.value.code == "vector_index_mismatch"
+    assert store.ready_chunks() == []
+    assert not embedder.calls
+
+
 def test_missing_uploaded_vectors_are_not_silently_ignored(upload_setup):
     from transport_law.knowledge import KnowledgeStore
 
     settings, embedder = upload_setup
     store = KnowledgeStore(settings, embedder)
-    ident = store.receive("lost.txt", BytesIO(b"Stored document."))["id"]
+    ident = store.receive("lost.pdf", BytesIO(pdf_bytes("Stored document.")))["id"]
     store.process(ident)
     chunks = store.ready_chunks()
     store._collection().delete(ids=[chunks[0].id])
@@ -538,7 +560,7 @@ def test_ready_upload_is_readable_in_a_fresh_process_without_model_calls(upload_
 
     settings, embedder = upload_setup
     store = KnowledgeStore(settings, embedder)
-    ident = store.receive("persist.txt", BytesIO(b"Persistent permit text."))["id"]
+    ident = store.receive("persist.pdf", BytesIO(pdf_bytes("Persistent permit text.")))["id"]
     store.process(ident)
     expected = [c.id for c in store.ready_chunks()]
     script = """

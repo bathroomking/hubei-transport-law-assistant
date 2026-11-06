@@ -37,9 +37,9 @@ def _filename(value: str) -> tuple[str, str, str]:
     ):
         raise AppError("invalid_filename", "文件名无效；请使用不包含路径的普通文件名。", 400)
     suffix = Path(name).suffix.lower()
-    if suffix not in {".pdf", ".txt", ".md", ".markdown"}:
-        raise AppError("unsupported_document", "上传只支持 PDF、TXT、MD 和 Markdown 文件。", 400)
-    return name, name.casefold(), ".md" if suffix == ".markdown" else suffix
+    if suffix != ".pdf":
+        raise AppError("unsupported_document", "上传只支持 PDF 文件。", 400)
+    return name, name.casefold(), suffix
 
 
 class KnowledgeStore:
@@ -63,7 +63,7 @@ class KnowledgeStore:
             "embedding_base_url": self.settings.dashscope_base_url,
             "query_instruction": self.settings.embedding_query_instruction,
             "document_template": "upload-title-heading-text-v1",
-            "chunking": "legal_recursive_v1:800:120",
+            "chunking": "pdf_legal_recursive_v1:800:120",
             "normalization": "l2",
             "distance": "cosine",
         }
@@ -305,7 +305,7 @@ class KnowledgeStore:
             ]
         else:
             loaded = replace(load_document(raw), file=row["filename"])
-            if loaded.format == "pdf" and any(not page.text.strip() for page in loaded.pages):
+            if any(not page.text.strip() for page in loaded.pages):
                 raise AppError(
                     "pdf_needs_ocr", "PDF 含无法提取文字的页面，请先做 OCR 后再导入。", 400
                 )
@@ -326,8 +326,7 @@ class KnowledgeStore:
             if draft.document_id != row["id"] or draft.source.sha256 != row["sha256"]:
                 raise AppError("upload_cache_mismatch", "已存分块与原文件不一致。", 409)
             locator = "；".join(
-                (f"PDF 第 {loc.pdf_page} 页，" if loc.pdf_page is not None else "")
-                + f"字符 [{loc.start_index}, {loc.end_index})"
+                f"PDF 第 {loc.pdf_page} 页，字符 [{loc.start_index}, {loc.end_index})"
                 for loc in draft.source.locations
             )
             chunks.append(

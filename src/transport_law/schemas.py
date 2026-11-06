@@ -25,8 +25,8 @@ class Source(Model):
     document_title: Text
     file: Text
     sha256: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
-    pdf_page: int | None = Field(default=None, ge=1)
-    source_type: Literal["pdf", "web", "txt", "md"] = "pdf"
+    pdf_page: int = Field(ge=1)
+    source_type: Literal["pdf"] = "pdf"
     locator: Text | None = None
     retrieved_on: date | None = None
     legal_level: Text | None = None
@@ -40,18 +40,6 @@ class Source(Model):
     verification_status: Literal["pending", "verified", "superseded"] = "pending"
     verification_note: Text
     supporting_sources: list[SupportingSource] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_locator(self):
-        if self.source_type == "pdf" and self.pdf_page is None:
-            raise ValueError("PDF 来源必须提供真实物理页码")
-        if self.source_type == "web" and (
-            self.pdf_page is not None or not self.locator or not self.official_url
-        ):
-            raise ValueError("网页来源必须提供官方链接和条文位置，不得填写 PDF 页码")
-        if self.source_type in {"txt", "md"} and (self.pdf_page is not None or not self.locator):
-            raise ValueError("文本来源必须提供字符位置，不得填写 PDF 页码")
-        return self
 
 
 class LegalChunk(Model):

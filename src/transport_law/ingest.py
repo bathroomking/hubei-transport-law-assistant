@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from transport_law.errors import AppError
 
@@ -17,14 +17,14 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class DocumentPage:
     text: str
-    pdf_page: int | None = None
+    pdf_page: int
 
 
 @dataclass(frozen=True)
 class LoadedDocument:
     file: str
     sha256: str
-    format: str
+    format: Literal["pdf"]
     pages: list[DocumentPage]
 
 
@@ -50,22 +50,14 @@ def _read_pdf(data: bytes) -> list[DocumentPage]:
 
 
 def load_document(path: Path) -> LoadedDocument:
-    """只在本机读取 PDF 或 UTF-8 文本；不调用模型、不执行 OCR。"""
-    file_format = path.suffix.lower().lstrip(".")
-    if file_format not in {"pdf", "txt", "md"}:
-        raise AppError("unsupported_document", "目前支持 PDF、UTF-8 TXT 和 Markdown。", 400)
+    """只在本机读取 PDF；不调用模型、不执行 OCR。"""
+    if path.suffix.lower() != ".pdf":
+        raise AppError("unsupported_document", "目前只支持 PDF 文件。", 400)
     try:
         data = path.read_bytes()
     except OSError as exc:
         raise AppError("document_read_failed", "无法读取文档，请检查文件路径和权限。", 400) from exc
-    if file_format == "pdf":
-        pages = _read_pdf(data)
-    else:
-        try:
-            pages = [DocumentPage(data.decode("utf-8-sig"))]
-        except UnicodeError as exc:
-            raise AppError("invalid_encoding", "请先把文本文件保存为 UTF-8 编码。", 400) from exc
-    return LoadedDocument(path.name, hashlib.sha256(data).hexdigest(), file_format, pages)
+    return LoadedDocument(path.name, hashlib.sha256(data).hexdigest(), "pdf", _read_pdf(data))
 
 
 def to_documents(

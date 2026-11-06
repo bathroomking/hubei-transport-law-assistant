@@ -122,10 +122,7 @@
   }
 
   function sourceLocation(source) {
-    if (source.source_type === "pdf") {
-      return `PDF 第 ${source.pdf_page} 页${source.printed_page ? ` · 印刷页码 ${source.printed_page}` : ""}`;
-    }
-    return `${source.source_type === "web" ? "官方网页" : "收录文档"}${source.locator ? ` · ${source.locator}` : ""}`;
+    return `PDF 第 ${source.pdf_page} 页${source.printed_page ? ` · 印刷页码 ${source.printed_page}` : ""}`;
   }
 
   function appendSourceLinks(target, source) {
@@ -384,7 +381,7 @@
 
   function fileError(file) {
     if (!file) return "请先选择一份资料。";
-    if (!/\.(pdf|txt|md|markdown)$/i.test(file.name.normalize("NFKC").trim())) return "请选择 PDF、TXT 或 Markdown 文件。";
+    if (!/\.pdf$/i.test(file.name.normalize("NFKC").trim())) return "请选择 PDF 文件。";
     if (!file.size) return "不能上传空文件，请选择有内容的资料。";
     if (uploadMaxBytes && file.size > uploadMaxBytes) return `文件超过当前 ${formatSize(uploadMaxBytes)} 的上传上限，请选择更小的文件。`;
     return "";

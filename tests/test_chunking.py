@@ -1,6 +1,7 @@
 import hashlib
 
 import pytest
+from pdf_fixtures import pdf_bytes
 from pydantic import ValidationError
 
 from transport_law.chunking import (
@@ -112,23 +113,31 @@ def test_ids_track_document_version_and_chunking_configuration():
     assert len({first.id, revised.id, resized.id}) == 3
 
 
-def test_markdown_preserves_headings_punctuation_and_utf8_bom(tmp_path):
-    text = "# 示例文档\r\n引言。\r\n## 分节\r\n第一条 示例一。\r\n第二条 示例二。"
-    path = tmp_path / "sample.md"
-    path.write_bytes(b"\xef\xbb\xbf" + text.encode())
+def test_pdf_preserves_chinese_chapters_sections_articles_and_punctuation(tmp_path):
+    text = "第一章 示例章\n引言。\n第一节 示例节\n第一条 示例一。\n第二条 示例二。"
+    path = tmp_path / "sample.PDF"
+    path.write_bytes(pdf_bytes(text))
     doc = load_document(path)
     chunks = build_draft_chunks(doc, ChunkingOptions())
-    assert [chunk.heading for chunk in chunks] == ["# 示例文档", "## 分节", "第一条", "第二条"]
+    assert [chunk.heading for chunk in chunks] == ["第一章", "第一节", "第一条", "第二条"]
     assert chunks[0].source.sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
-    assert all(chunk.source.locations[0].pdf_page is None for chunk in chunks)
+    assert doc.format == "pdf"
+    assert all(chunk.source.locations[0].pdf_page == 1 for chunk in chunks)
     assert_source_coverage(doc, chunks)
 
 
+def test_markdown_markers_do_not_split_pdf_content():
+    doc = document("# 文件中的普通文字\n正文。\n## 另一个普通段落\n后文。")
+    [chunk] = build_draft_chunks(doc, ChunkingOptions())
+    assert chunk.heading is None
+    assert chunk.text == doc.pages[0].text
+
+
 def test_document_metadata_survives_loading_splitting_and_storage(tmp_path):
-    path = tmp_path / "sample.txt"
-    path.write_text("第一条　" + "测试文本，" * 60, encoding="utf-8")
+    path = tmp_path / "sample.pdf"
+    path.write_bytes(pdf_bytes("第一条　" + "测试文本，" * 60))
     pages = load_documents(path, document_id="sample-law", title="示例法规")
-    assert pages[0].metadata["pdf_page"] is None
+    assert pages[0].metadata["pdf_page"] == 1
     assert pages[0].metadata["source"]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
     parts = split_legal_documents(pages, ChunkingOptions(chunk_size=80, chunk_overlap=12))
     assert len(parts) > 1
@@ -187,7 +196,9 @@ def test_invalid_chunk_parameters(size, overlap):
 @pytest.mark.parametrize(
     "name, content, code",
     [
-        ("bad.txt", b"\xff\xff", "invalid_encoding"),
+        ("example.txt", b"example", "unsupported_document"),
+        ("example.md", b"example", "unsupported_document"),
+        ("example.markdown", b"example", "unsupported_document"),
         ("example.docx", b"example", "unsupported_document"),
         ("bad.pdf", b"not a PDF", "pdf_read_failed"),
     ],
@@ -205,15 +216,30 @@ def test_blank_documents_have_no_chunks():
 
 
 def test_loading_blank_pdf_keeps_physical_page(tmp_path):
-    from pypdf import PdfWriter
-
     path = tmp_path / "blank.pdf"
-    writer = PdfWriter()
-    writer.add_blank_page(width=300, height=400)
-    with path.open("wb") as stream:
-        writer.write(stream)
+    path.write_bytes(pdf_bytes(""))
     before = path.read_bytes()
     loaded = load_document(path)
     assert len(loaded.pages) == 1
     assert loaded.pages[0].pdf_page == 1 and not loaded.pages[0].text.strip()
     assert path.read_bytes() == before
+
+
+def test_loading_pdf_and_cross_page_chunking_preserve_physical_source_locations(tmp_path):
+    path = tmp_path / "multi.pdf"
+    path.write_bytes(pdf_bytes("第一条 示例条文前半段，", "这是后半段。\n第二条 另一个条文。"))
+    loaded = load_document(path)
+    chunks = build_draft_chunks(loaded, ChunkingOptions())
+    assert len(chunks) == 2
+    assert [location.pdf_page for location in chunks[0].source.locations] == [1, 2]
+    assert [location.pdf_page for location in chunks[1].source.locations] == [2]
+    assert_source_coverage(loaded, chunks)
+
+
+@pytest.mark.parametrize("page", [None, 0, -1])
+def test_draft_source_requires_positive_pdf_page(page):
+    [chunk] = build_draft_chunks(document("第一条 示例内容。"), ChunkingOptions())
+    payload = chunk.model_dump()
+    payload["source"]["locations"][0]["pdf_page"] = page
+    with pytest.raises(ValidationError):
+        DraftChunk.model_validate(payload)

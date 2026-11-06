@@ -23,7 +23,7 @@ def _reading_order(article: LegalChunk) -> tuple:
     # 片段 ID 为哈希，按入库时保存的页码和字符位置恢复阅读顺序。
     position = re.search(r"字符 \[(\d+),", article.source.locator or "")
     return (
-        article.source.pdf_page or 0,
+        article.source.pdf_page,
         int(position.group(1)) if position else float("inf"),
         article.id,
     )

@@ -17,17 +17,16 @@ from transport_law.schemas import Identifier, Model, Text
 if TYPE_CHECKING:
     from langchain_core.documents import Document
 
-# 行首的条、章、节和 Markdown 标题是候选结构边界；这不是法律语义解析器。
+# 行首的条、章、节是候选结构边界；这不是法律语义解析器。
 _HEADING = re.compile(
     r"(?m)^[ \t\u3000]*(?P<heading>"
     r"第[一二三四五六七八九十百千万零〇两0-9０-９]+[ \t]*[条章节]"
-    r"(?:之[一二三四五六七八九十百千万零〇两0-9０-９]+)?"
-    r"|#{1,6}[ \t]+[^\r\n]+)"
+    r"(?:之[一二三四五六七八九十百千万零〇两0-9０-９]+)?)"
 )
 
 
 class ChunkingOptions(Model):
-    strategy: Literal["legal_recursive_v1"] = "legal_recursive_v1"
+    strategy: Literal["pdf_legal_recursive_v1"] = "pdf_legal_recursive_v1"
     chunk_size: int = Field(default=800, ge=1, le=20000)
     chunk_overlap: int = Field(default=120, ge=0)
 
@@ -41,7 +40,7 @@ class ChunkingOptions(Model):
 class SourceLocation(Model):
     """字符位置从 0 开始，end_index 不包含在内；PDF 位置相对于各页提取文本。"""
 
-    pdf_page: int | None = Field(default=None, ge=1)
+    pdf_page: int = Field(ge=1)
     start_index: int = Field(ge=0)
     end_index: int = Field(gt=0)
 
@@ -49,7 +48,7 @@ class SourceLocation(Model):
 class DraftSource(Model):
     file: Text
     sha256: str
-    format: Literal["pdf", "txt", "md"]
+    format: Literal["pdf"]
     locations: list[SourceLocation] = Field(min_length=1)
 
 
@@ -87,12 +86,8 @@ def _can_join_pages(previous: Document, current: Document) -> bool:
     previous_meta, current_meta = dict(previous.metadata), dict(current.metadata)
     previous_page = previous_meta.pop("pdf_page")
     current_page = current_meta.pop("pdf_page")
-    # 批量导入时，不拼接不同文档/版本，也不跨越被省略的页。
-    return (
-        previous_page is not None
-        and current_page == previous_page + 1
-        and previous_meta == current_meta
-    )
+    # 不拼接不同文档/版本，也不跨越被省略的页。
+    return current_page == previous_page + 1 and previous_meta == current_meta
 
 
 def _page_groups(pages: list[Document]) -> list[list[Document]]:

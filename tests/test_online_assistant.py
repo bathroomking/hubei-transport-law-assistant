@@ -5,6 +5,7 @@ from pathlib import Path
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pdf_fixtures import pdf_bytes
 from test_knowledge import upload_setup as upload_setup
 
 from transport_law.cli import parser, run
@@ -111,8 +112,8 @@ def test_upload_is_visible_to_same_runtime_and_citations_without_restart(online_
             "/api/v1/knowledge/documents",
             files={
                 "file": (
-                    "施工说明.txt",
-                    "第一条 施工许可需要审批。\n第二条 施工许可应留存记录。".encode(),
+                    "施工说明.pdf",
+                    pdf_bytes("第一条 施工许可需要审批。\n第二条 施工许可应留存记录。"),
                 )
             },
         )
@@ -150,7 +151,7 @@ def test_cli_reads_existing_uploaded_library_and_never_reembeds_documents(
 ):
     settings, embedder = online_setup
     store = KnowledgeStore(settings)
-    ident = store.receive("说明.txt", BytesIO("施工许可需要审批。".encode()))["id"]
+    ident = store.receive("说明.pdf", BytesIO(pdf_bytes("施工许可需要审批。")))["id"]
     store.process(ident)
     expected = store.ready_chunks()[0]
     llm = EvidenceLLM()
@@ -166,10 +167,10 @@ def test_cli_reads_existing_uploaded_library_and_never_reembeds_documents(
 def test_queued_failed_chunks_and_partial_vectors_are_excluded_from_answer(online_setup):
     settings, embedder = online_setup
     store = KnowledgeStore(settings)
-    queued = store.receive("queued.txt", BytesIO(b"Unprocessed permit."))["id"]
+    queued = store.receive("queued.pdf", BytesIO(pdf_bytes("Unprocessed permit.")))["id"]
     embedder.fail_on_call = 2
-    body = "\n".join(f"# Part {i}\nFailed permit {i}." for i in range(6))
-    failed = store.receive("failed.md", BytesIO(body.encode()))["id"]
+    body = "\n".join(f"第{i}条 Failed permit {i}." for i in "一二三四五六")
+    failed = store.receive("failed.pdf", BytesIO(pdf_bytes(body)))["id"]
     store.process(failed)
     assert store.get_document(failed)["status"] == "failed"
     assert store.get_document(failed)["embedded_count"] == 2
@@ -182,7 +183,7 @@ def test_queued_failed_chunks_and_partial_vectors_are_excluded_from_answer(onlin
         assert client.get(f"/api/v1/documents/{queued}").status_code == 404
         embedder.fail_on_call = None
         added = client.post(
-            "/api/v1/knowledge/documents", files={"file": ("ready.txt", b"Ready permit.")}
+            "/api/v1/knowledge/documents", files={"file": ("ready.pdf", pdf_bytes("Ready permit."))}
         )
         ready = added.json()["id"]
         answer = client.post("/api/v1/ask", json={"question": "permit"}).json()
@@ -193,7 +194,7 @@ def test_queued_failed_chunks_and_partial_vectors_are_excluded_from_answer(onlin
 def test_dense_failure_does_not_fall_back_to_sparse_answer(online_setup, monkeypatch):
     settings, embedder = online_setup
     store = KnowledgeStore(settings)
-    ident = store.receive("说明.txt", BytesIO("施工许可需要审批。".encode()))["id"]
+    ident = store.receive("说明.pdf", BytesIO(pdf_bytes("施工许可需要审批。")))["id"]
     store.process(ident)
 
     def fail(question):

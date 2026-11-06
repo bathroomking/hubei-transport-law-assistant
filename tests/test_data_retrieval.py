@@ -5,7 +5,7 @@ from transport_law.config import PROJECT_ROOT, Settings
 from transport_law.errors import AppError
 from transport_law.repository import ChunkRepository
 from transport_law.retrieval import BM25Retriever, tokenize
-from transport_law.schemas import SearchRequest
+from transport_law.schemas import SearchRequest, Source
 
 
 def test_keyword_ranking_uses_uploaded_text_and_exact_ids(retriever):
@@ -101,3 +101,28 @@ def test_secret_mask_and_relative_storage_paths(settings):
     assert "law_data_path" not in Settings.model_fields
     assert "chroma_collection" not in Settings.model_fields
     assert not settings.llm_configured
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"source_type": "txt"},
+        {"source_type": "md"},
+        {"source_type": "web"},
+        {"pdf_page": None},
+        {"pdf_page": 0},
+        {"pdf_page": -1},
+    ],
+)
+def test_public_sources_require_pdf_type_and_positive_physical_page(repository, update):
+    payload = repository.all_chunks[0].source.model_dump()
+    payload.update(update)
+    with pytest.raises(ValidationError):
+        Source.model_validate(payload)
+
+
+def test_public_source_requires_page_even_with_character_locator(repository):
+    payload = repository.all_chunks[0].source.model_dump()
+    del payload["pdf_page"]
+    with pytest.raises(ValidationError):
+        Source.model_validate(payload)

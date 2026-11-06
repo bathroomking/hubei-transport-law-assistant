@@ -33,16 +33,17 @@
       <h1 id="page-title">有交通法规问题？<br><span>直接说说你的情况。</span></h1>
       <p>检索已入库的上传资料，回答与出处一起看。</p>
     </section>
-    <form id="ask-form" class="question-card">
+    <div class="chat-toolbar"><div><h2>临时聊天</h2><p>可连续追问，刷新或关闭页面会清空聊天。</p></div><button id="clear-chat" type="button" class="button secondary">清空聊天</button></div>
+    <div id="ask-results" class="results" role="region" aria-label="聊天记录与引用依据" aria-live="polite" aria-busy="false">
+      <div class="empty-state"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg><p>先上传资料并完成入库，再提问查看回答和引用原文。</p></div>
+    </div>
+    <form id="ask-form" class="question-card" autocomplete="off">
       <div class="question-heading"><label for="ask-question">你想了解什么？</label><a href="#knowledge" class="text-link"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg>补充自己的资料</a></div>
-      <textarea id="ask-question" name="question" rows="4" minlength="2" maxlength="2000" required placeholder="例如：在湖北一段普通公路上，施工队没办许可就挖沟埋管。这种情况该怎么处理，有什么依据？" aria-describedby="ask-hint ask-count"></textarea>
+      <textarea id="ask-question" name="question" rows="4" minlength="1" maxlength="2000" required placeholder="例如：在湖北一段普通公路上，施工队没办许可就挖沟埋管。这种情况该怎么处理，有什么依据？" aria-describedby="ask-hint ask-count"></textarea>
       <div class="question-toolbar"><span id="ask-count" class="char-count">0 / 2000</span><div class="submit-group"><span class="keyboard-hint">Ctrl / ⌘ + Enter</span><button id="send-question" type="submit" class="button primary"><span>发送问题</span><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div></div>
       <div class="examples" aria-label="提问示例"><span>试着问</span><button type="button" data-example="在湖北一段普通公路上，施工队没办许可就挖沟埋管。这种情况该怎么处理，有什么依据？">公路上挖沟，怎么办？</button><button type="button" data-example="占用公路施工需要办什么手续？请给我相关规定和原文。">占道施工需要哪些手续？</button><button type="button" data-example="在湖北普通公路上未经许可占道施工，想了解处罚和裁量依据，还需要核实哪些情况？">处罚前还要核实什么？</button></div>
     </form>
-    <p id="ask-hint" class="input-hint">每次提问独立处理。补充情况时，请把原有背景和新增信息写在同一个问题里。问题会用于在线检索，并与命中资料一同交给 DeepSeek 回答。</p>
-    <div id="ask-results" class="results" role="region" aria-label="回答与依据" aria-live="polite" aria-busy="false">
-      <div class="empty-state"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg><p>先上传资料并完成入库，再提问查看回答和引用原文。</p></div>
-    </div>
+    <p id="ask-hint" class="input-hint">补充情况时直接输入即可，无需重复原有背景。问题和必要的对话背景会与命中资料一同交给 DeepSeek 回答。清空、刷新或关闭页面只清除聊天，已上传资料和知识库不受影响。</p>
     </section>
     <section id="view-knowledge" aria-labelledby="knowledge-title" hidden>
       <div class="intro library-intro"><span class="eyebrow">补充资料 · 自动入库 · 统一问答</span><h1 id="knowledge-title">把需要参考的资料<br><span>加入问答资料库。</span></h1><p>上传后自动提取和整理文字，入库完成即可参与下一次提问。</p></div>

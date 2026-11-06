@@ -62,11 +62,40 @@ class LegalChunk(Model):
     source: Source
 
 
+class ChatMessage(Model):
+    role: Literal["user", "assistant"]
+    content: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20000)
+    ]
+    citation_ids: list[Identifier] = Field(default_factory=list, max_length=10)
+
+
+class ChatState(Model):
+    """由页面内存携带；仅作未核实的聊天背景，不是法规证据。"""
+
+    summary: str = Field(default="", max_length=6000)
+    messages: list[ChatMessage] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_history(self):
+        if len(self.messages) % 2:
+            raise ValueError("历史须包含完整的用户/助手轮次")
+        if any(
+            message.role != ("user" if i % 2 == 0 else "assistant")
+            for i, message in enumerate(self.messages)
+        ):
+            raise ValueError("历史消息须按用户、助手顺序排列")
+        if sum(len(message.content) for message in self.messages) + len(self.summary) > 100000:
+            raise ValueError("历史过长，请清空聊天后重试")
+        return self
+
+
 class SearchRequest(Model):
     question: Annotated[
-        str, StringConstraints(strip_whitespace=True, min_length=2, max_length=2000)
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)
     ]
     top_k: int | None = Field(default=None, ge=1, le=10)
+    chat_state: ChatState = Field(default_factory=ChatState)
 
 
 class HybridScore(Model):
@@ -124,3 +153,6 @@ class AnswerResponse(Model):
     notice: str = "当前仅解释已收录材料；文件效力、适用地域和个案事实尚未完成核验。"
     model: str | None = None
     usage: Usage | None = None
+    chat_state: ChatState = Field(default_factory=ChatState)
+    retrieval_query: str = ""
+    context_compacted: bool = False

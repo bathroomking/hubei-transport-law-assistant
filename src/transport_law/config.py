@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     deepseek_max_tokens: int = Field(default=3000, ge=128, le=16384)
     deepseek_max_retries: int = Field(default=1, ge=0, le=3)
     retrieval_top_k: int = Field(default=5, ge=1, le=10)
+    chat_history_token_limit: int = Field(default=7000, ge=1000, le=20000)
+    chat_recent_turns: int = Field(default=4, ge=1, le=8)
+    chat_recent_token_limit: int = Field(default=4000, ge=500, le=10000)
+    chat_summary_token_limit: int = Field(default=1200, ge=200, le=2000)
+    # 应用预算（含预留输出），使用字符/UTF-8估算；不是模型窗口上限。
+    chat_context_token_limit: int = Field(default=24000, ge=8000, le=64000)
     hybrid_candidate_k: int = Field(default=50, ge=10, le=200)
     hybrid_rrf_k: int = Field(default=60, ge=1, le=1000)
     dashscope_api_key: SecretStr = SecretStr("")

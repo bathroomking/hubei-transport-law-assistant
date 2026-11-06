@@ -68,7 +68,16 @@ textarea::placeholder { color: #859087; }
 .examples button { background: #f2f5ee; color: #516756; border: 0; border-radius: 6px; padding: 8px 10px; font-size: 12px; }
 .examples button:hover:not(:disabled) { background: #e4edde; }
 .input-hint { margin: 13px 3px 0; color: var(--muted); font-size: 12px; line-height: 1.8; }
-.results { margin-top: 34px; overflow-wrap: anywhere; }
+.chat-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; margin: 3px 0 20px; }
+.chat-toolbar h2 { font-size: 18px; font-weight: 600; }
+.chat-toolbar p { margin-top: 7px; color: var(--muted); font-size: 12px; line-height: 1.8; }
+.results { margin-bottom: 26px; overflow-wrap: anywhere; }
+.chat-turn + .chat-turn { margin-top: 36px; padding-top: 30px; border-top: 1px solid var(--line); }
+.user-message { margin: 0 0 17px 12%; padding: 18px 22px; border-radius: 14px; background: #e5eddf; }
+.user-message .message-label { margin-bottom: 7px; color: var(--green); font-size: 12px; font-weight: 600; }
+.user-message p { font-size: 15px; line-height: 1.8; white-space: pre-wrap; }
+.context-note { margin: 16px 3px 0; color: var(--muted); font-size: 12px; line-height: 1.8; }
+.cancelled-message { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 20px 23px; border: 1px solid var(--line); border-radius: 12px; color: var(--muted); font-size: 14px; }
 .empty-state { padding: 25px 15px 33px; display: flex; align-items: center; justify-content: center; gap: 12px; color: #728173; font-size: 13px; line-height: 1.8; }
 .empty-state .icon { width: 23px; height: 23px; }
 .results-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-bottom: 17px; }
@@ -198,6 +207,9 @@ dialog::backdrop { background: #142d266e; backdrop-filter: blur(3px); }
   .intro h1 { font-size: 31px; }
   .intro p { font-size: 14px; }
   .question-card { padding: 20px 18px 0; border-radius: 15px; }
+  .chat-toolbar { align-items: flex-start; }
+  .chat-toolbar .button { min-height: 36px; padding: 7px 11px; font-size: 12px; }
+  .user-message { margin-left: 6%; padding: 16px 18px; }
   .keyboard-hint { display: none; }
   .button { padding: 10px 15px; }
   .examples { gap: 7px; }

@@ -9,6 +9,9 @@
   const dialog = $("#detail-dialog");
   let questionController;
   let dialogController;
+  let chatState = { summary: "", messages: [] };
+  let chatGeneration = 0;
+  let pendingTurn;
   let healthLoading = false;
   let activeView = "ask";
 
@@ -68,7 +71,7 @@
       if (!response.ok) {
         let message = data.error?.message;
         if (!message && Array.isArray(data.detail)) {
-          message = path === "/api/v1/ask" ? "请检查问题长度，输入 2 至 2000 个字符后重试。" : "请检查上传文件和请求格式后重试。";
+          message = path === "/api/v1/ask" ? "请检查问题长度，输入 1 至 2000 个字符后重试。" : "请检查上传文件和请求格式后重试。";
         }
         const error = new Error(message || `请求失败（${response.status}），请稍后重试。`);
         error.code = data.error?.code;
@@ -155,7 +158,7 @@
     return card;
   }
 
-  function renderAnswer(data) {
+  function renderAnswer(target, data) {
     const sources = data.sources || [];
     const card = el("section", "answer-card");
     card.append(el("h2", "", data.status === "insufficient_evidence" ? "还需要更多依据" : "关于你的问题"));
@@ -173,22 +176,19 @@
       card.append(paragraph);
     }
     if (data.notice) card.append(notice(data.notice));
-    results.replaceChildren(card);
+    target.replaceChildren(card);
     if (data.follow_up_questions?.length) {
       const followUp = el("section", "follow-up");
       const list = el("ol");
       data.follow_up_questions.forEach((question) => list.append(el("li", "", question)));
       followUp.append(el("h2", "", "还需要了解这些情况"), list,
-        el("p", "", "请把补充信息写回上方问题，保留原有背景后再次发送。"),
+        el("p", "", "直接在输入框补充情况即可，助手会结合这次聊天继续回答。"),
         button("补充情况", "text-button", () => {
-          const marker = "\n\n补充：";
-          if (!input.value.endsWith(marker) && input.value.length + marker.length <= input.maxLength) input.value += marker;
-          updateInput();
           input.focus();
           input.setSelectionRange(input.value.length, input.value.length);
           input.scrollIntoView({ block: "center", behavior: "smooth" });
         }));
-      results.append(followUp);
+      target.append(followUp);
     }
     if (sources.length) {
       const section = el("section", "sources-section");
@@ -196,7 +196,7 @@
       heading.append(el("h2", "", "回答引用的原文"), el("span", "", `${sources.length} 条依据`));
       section.append(heading);
       sources.forEach((source, index) => section.append(sourceCard(source, index)));
-      results.append(section);
+      target.append(section);
     }
     const citedIds = new Set(sources.map((source) => source.id));
     const additional = (data.source_documents || []).filter((source) => !citedIds.has(source.id));
@@ -205,8 +205,9 @@
       details.append(el("summary", "", `另有 ${additional.length} 条相关资料`),
         el("p", "", "以下资料由检索找到，未作为本次回答的引用依据。"));
       additional.forEach((source) => details.append(sourceCard(source)));
-      results.append(details);
+      target.append(details);
     }
+    if (data.context_compacted) target.append(el("p", "context-note", "已整理较早的对话，可继续补充情况。"));
   }
 
   function updateInput() {
@@ -234,33 +235,99 @@
       input.focus();
     });
   });
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
+  function clearChat(focus = false) {
+    // Invalidate old requests before aborting: their catch/finally may run later.
+    chatGeneration += 1;
+    questionController?.abort();
+    questionController = undefined;
+    dialogController?.abort();
+    dialogController = undefined;
+    if (dialog.open) dialog.close();
+    $("#dialog-content").replaceChildren();
+    $("#dialog-content").setAttribute("aria-busy", "false");
+    chatState = { summary: "", messages: [] };
+    pendingTurn = undefined;
+    results.replaceChildren(el("p", "empty-state", "直接提问开始临时聊天，回答和引用原文会保留在这里。"));
+    input.value = "";
+    updateInput();
+    setBusy(false);
+    if (focus) input.focus();
+  }
+
+  function createTurn(question) {
+    pendingTurn?.container.remove();
+    $(".empty-state", results)?.remove();
+    const container = el("article", "chat-turn");
+    const user = el("section", "user-message");
+    user.append(el("h2", "message-label", "你"), el("p", "", question));
+    const response = el("div", "assistant-message");
+    container.append(user, response);
+    results.append(container);
+    return { question, container, response };
+  }
+
+  async function submitQuestion(question) {
     if (questionController) return;
-    const question = input.value.trim();
-    if (question.length < 2 || question.length > 2000) {
-      input.setCustomValidity("请输入 2 至 2000 个字符的问题。");
+    if (question.length < 1 || question.length > 2000) {
+      input.setCustomValidity("请输入 1 至 2000 个字符的问题。");
       input.reportValidity();
       return;
     }
+    const generation = chatGeneration;
+    const turn = pendingTurn?.question === question ? pendingTurn : createTurn(question);
+    pendingTurn = turn;
     const controller = new AbortController();
     questionController = controller;
+    const isCurrent = () => generation === chatGeneration && questionController === controller;
+    const retry = () => {
+      if (generation !== chatGeneration || questionController) return;
+      input.value = question;
+      updateInput();
+      submitQuestion(question);
+    };
     setBusy(true);
-    renderLoading(results, "正在查找依据并在线回答…", () => controller.abort());
+    renderLoading(turn.response, "正在查找依据并在线回答…", () => controller.abort());
+    turn.container.scrollIntoView({ block: "start", behavior: "smooth" });
     try {
-      const data = await request("/api/v1/ask", { body: { question }, signal: controller.signal });
-      if (!controller.signal.aborted) renderAnswer(data);
+      const data = await request("/api/v1/ask", { body: { question, chat_state: chatState }, signal: controller.signal });
+      if (!isCurrent()) return;
+      if (controller.signal.aborted) throw new DOMException("已取消等待", "AbortError");
+      // Commit context only after a complete response; failed/cancelled attempts
+      // keep the last successful state and can reuse this turn's cards.
+      if (!data.chat_state || typeof data.chat_state.summary !== "string" || !Array.isArray(data.chat_state.messages)) {
+        throw new Error("服务未返回完整的聊天内容，请重试。");
+      }
+      renderAnswer(turn.response, data);
+      chatState = data.chat_state;
+      pendingTurn = undefined;
+      input.value = "";
+      updateInput();
     } catch (error) {
+      if (!isCurrent()) return;
       if (error.name === "AbortError") {
-        results.replaceChildren(el("p", "empty-state", "已取消等待，可以修改问题后重新发送。"));
+        const cancelled = el("div", "cancelled-message");
+        cancelled.append(el("p", "", "已取消等待，可以重试或修改问题。"), button("重新尝试", "button secondary", retry));
+        turn.response.replaceChildren(cancelled);
       } else {
-        renderError(results, error, () => form.requestSubmit());
+        renderError(turn.response, error, retry);
       }
     } finally {
-      questionController = undefined;
-      setBusy(false);
+      if (isCurrent()) {
+        questionController = undefined;
+        turn.response.setAttribute("aria-busy", "false");
+        setBusy(false);
+      }
     }
+  }
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitQuestion(input.value.trim());
   });
+  $("#clear-chat").addEventListener("click", () => clearChat(true));
+  // Clear on both sides of navigation, including restoration from back/forward cache.
+  window.addEventListener("pagehide", () => clearChat());
+  window.addEventListener("pageshow", () => clearChat());
 
   function metadata(entries) {
     const list = el("dl", "metadata");
@@ -351,7 +418,7 @@
   }
 
   $("#close-dialog").addEventListener("click", () => dialog.close());
-  dialog.addEventListener("close", () => dialogController?.abort());
+  dialog.addEventListener("close", () => { if (!dialog.open) dialogController?.abort(); });
   dialog.addEventListener("click", (event) => {
     if (event.target !== dialog) return;
     const rect = dialog.getBoundingClientRect();

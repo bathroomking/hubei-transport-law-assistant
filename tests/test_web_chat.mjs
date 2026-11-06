@@ -10,7 +10,7 @@ const script = readFileSync(new URL("../src/transport_law/web/app.js", import.me
 
 class Element {
   constructor(tag, ownerDocument) {
-    Object.assign(this, { tagName: tag.toLowerCase(), ownerDocument, children: [], attributes: {}, listeners: {}, dataset: {}, value: "", disabled: false, open: false });
+    Object.assign(this, { tagName: tag.toLowerCase(), ownerDocument, children: [], attributes: {}, listeners: {}, dataset: {}, style: {}, scrollHeight: 56, value: "", disabled: false, open: false });
     this.classList = {
       add: (name) => { this.className = [...new Set([...this.className.split(" "), name])].join(" "); },
       remove: (name) => { this.className = this.className.split(" ").filter((item) => item !== name).join(" "); },
@@ -160,14 +160,15 @@ function answer(question, { messages = [], summary = "", compacted = false, suff
   };
 }
 
-test("successive questions send returned context and preserve separate original/source cards", async () => {
+test("successive questions keep follow-ups in answers and open each turn's citation on demand", async () => {
   const app = await setup();
   app.send("未经许可施工");
   assert.deepEqual(app.asks()[0].body, { question: "未经许可施工", chat_state: { summary: "", messages: [] } });
   const first = answer("未经许可施工");
   await app.respond(app.asks()[0], first);
   assert.equal(app.$("#ask-question").value, "");
-  assert.equal(app.$(".follow-up").textContent.includes("直接在输入框"), true);
+  assert.equal(app.$(".answer-card").textContent.includes("还有什么情况？"), true);
+  assert.equal(app.$(".assistant-message").childElementCount, 1);
   app.send("已经恢复原状");
   assert.deepEqual(app.asks()[1].body.chat_state, first.chat_state);
   const second = answer("已经恢复原状", { summary: "早期情况", compacted: true, suffix: "二" });
@@ -175,15 +176,68 @@ test("successive questions send returned context and preserve separate original/
   assert.equal(app.document.querySelectorAll(".chat-turn").length, 2);
   assert.equal(app.document.querySelectorAll(".user-message").length, 2);
   assert.equal(app.document.querySelectorAll(".answer-card").length, 2);
-  assert.equal(app.document.querySelectorAll(".source-card").length, 2);
-  assert.equal(app.$("#ask-results").textContent.includes("原文一"), true);
-  assert.equal(app.$("#ask-results").textContent.includes("原文二"), true);
+  assert.equal(app.document.querySelectorAll(".citation").length, 2);
+  assert.equal(app.$("#ask-results").textContent.includes("原文一"), false);
+  assert.equal(app.$("#ask-results").textContent.includes("原文二"), false);
+  assert.equal(app.$("#ask-results").querySelectorAll(".original-text").length, 0);
   assert.ok(app.$(".context-note"));
   app.$(".citation").click();
   assert.equal(app.calls.at(-1).path, "/api/v1/articles/article-%E4%B8%80");
   assert.equal(app.$("#detail-dialog").open, true);
+  await app.respond(app.calls.at(-1), first.sources[0]);
+  assert.equal(app.$("#dialog-content .original-text").textContent, "原文一");
+  app.$("#close-dialog").click();
+  app.document.querySelectorAll(".citation")[1].click();
+  assert.equal(app.calls.at(-1).path, "/api/v1/articles/article-%E4%BA%8C");
+  await app.respond(app.calls.at(-1), second.sources[0]);
+  assert.equal(app.$("#dialog-content .original-text").textContent, "原文二");
+  app.$("#close-dialog").click();
   app.send("还有哪些依据");
   assert.deepEqual(app.asks()[2].body.chat_state, second.chat_state);
+});
+
+test("uncited retrieved text stays out of the chat and citations remain tied to known sources", async () => {
+  const app = await setup();
+  app.send("问题");
+  const data = answer("问题");
+  data.claims[0].text = "<script>这是资料中的文字</script>";
+  data.claims[0].citation_ids.push("article-一", "unknown-source");
+  data.source_documents = [{ ...data.sources[0], id: "retrieved-only", text: "未引用的检索原文" }];
+  await app.respond(app.asks()[0], data);
+  assert.equal(app.document.querySelectorAll(".citation").length, 1);
+  assert.equal(app.$(".citation").attributes["aria-haspopup"], "dialog");
+  assert.equal(app.$("#ask-results").textContent.includes("未引用的检索原文"), false);
+  assert.equal(app.$(".answer-card").textContent.includes(data.claims[0].text), true);
+  assert.equal(app.$(".answer-card").querySelectorAll("script").length, 0);
+});
+
+test("clarifying questions and notices stay in the same assistant reply without citations", async () => {
+  const app = await setup();
+  app.send("是的");
+  const data = answer("是的");
+  Object.assign(data, { status: "insufficient_evidence", answer: "暂时还不能判断。", claims: [], sources: [], notice: "请先补充事实。" });
+  await app.respond(app.asks()[0], data);
+  const reply = app.$(".assistant-message");
+  assert.equal(reply.childElementCount, 1);
+  for (const text of [data.answer, ...data.follow_up_questions, data.notice]) {
+    assert.equal(app.$(".answer-card").textContent.includes(text), true);
+  }
+  assert.equal(reply.querySelectorAll(".citation").length, 0);
+});
+
+test("welcome examples fill the shared composer and remain usable after clearing chat", async () => {
+  const app = await setup();
+  const example = app.$("[data-example]");
+  example.click();
+  assert.equal(app.$("#ask-question").value, example.dataset.example);
+  app.$("#ask-form").requestSubmit();
+  assert.equal(app.$("#chat-welcome"), null);
+  await app.respond(app.asks()[0], answer(example.dataset.example));
+  app.$("#clear-chat").click();
+  assert.ok(app.$("#chat-welcome"));
+  app.$("[data-example]").click();
+  assert.equal(app.$("#ask-question").value, example.dataset.example);
+  assert.equal(app.document.activeElement, app.$("#ask-question"));
 });
 
 test("failed and cancelled retries retain successful state without duplicate cards", async () => {

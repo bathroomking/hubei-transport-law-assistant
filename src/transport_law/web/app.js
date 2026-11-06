@@ -6,6 +6,7 @@
   const form = $("#ask-form");
   const input = $("#ask-question");
   const results = $("#ask-results");
+  const welcome = $("#chat-welcome");
   const dialog = $("#detail-dialog");
   let questionController;
   let dialogController;
@@ -144,80 +145,49 @@
     return control;
   }
 
-  function sourceCard(chunk, index) {
-    const card = el("article", "source-card");
-    const heading = el("div", "source-heading");
-    if (index !== undefined) heading.append(el("span", "source-number", String(index + 1)));
-    const title = el("div");
-    title.append(el("h3", "", chunk.article), el("p", "source-document", chunk.source.document_title));
-    heading.append(title);
-    const actions = el("div", "source-actions");
-    actions.append(button("条文详情", "text-button", () => openArticle(chunk.id)), documentButton(chunk));
-    appendSourceLinks(actions, chunk.source);
-    card.append(heading, el("p", "original-text", chunk.text), el("p", "source-location", sourceLocation(chunk.source)), actions);
-    return card;
-  }
-
   function renderAnswer(target, data) {
     const sources = data.sources || [];
     const card = el("section", "answer-card");
-    card.append(el("h2", "", data.status === "insufficient_evidence" ? "还需要更多依据" : "关于你的问题"));
+    const label = el("h2", "assistant-label", "法规助手");
+    label.prepend(icon("book"));
+    card.append(label);
     const claims = data.claims || [];
     if (!claims.length) card.append(el("p", "answer-claim", data.answer));
     for (const claim of claims) {
       const paragraph = el("p", "answer-claim", claim.text);
-      for (const id of claim.citation_ids || []) {
+      for (const id of new Set(claim.citation_ids || [])) {
         const index = sources.findIndex((source) => source.id === id);
         if (index < 0) continue;
         const citation = button(`[${index + 1}]`, "citation", () => openArticle(id));
         citation.setAttribute("aria-label", `查看引用 ${index + 1}：${sources[index].article}`);
+        citation.setAttribute("aria-haspopup", "dialog");
+        citation.title = `${sources[index].source.document_title} · ${sourceLocation(sources[index].source)}`;
         paragraph.append(citation);
       }
       card.append(paragraph);
     }
-    if (data.notice) card.append(notice(data.notice));
-    target.replaceChildren(card);
     if (data.follow_up_questions?.length) {
-      const followUp = el("section", "follow-up");
+      const followUp = el("div", "answer-follow-up");
       const list = el("ol");
       data.follow_up_questions.forEach((question) => list.append(el("li", "", question)));
-      followUp.append(el("h2", "", "还需要了解这些情况"), list,
-        el("p", "", "直接在输入框补充情况即可，助手会结合这次聊天继续回答。"),
-        button("补充情况", "text-button", () => {
-          input.focus();
-          input.setSelectionRange(input.value.length, input.value.length);
-          input.scrollIntoView({ block: "center", behavior: "smooth" });
-        }));
-      target.append(followUp);
+      followUp.append(el("p", "", "为了进一步判断，还想请你补充："), list);
+      card.append(followUp);
     }
-    if (sources.length) {
-      const section = el("section", "sources-section");
-      const heading = el("div", "results-heading");
-      heading.append(el("h2", "", "回答引用的原文"), el("span", "", `${sources.length} 条依据`));
-      section.append(heading);
-      sources.forEach((source, index) => section.append(sourceCard(source, index)));
-      target.append(section);
-    }
-    const citedIds = new Set(sources.map((source) => source.id));
-    const additional = (data.source_documents || []).filter((source) => !citedIds.has(source.id));
-    if (additional.length) {
-      const details = el("details", "additional-sources");
-      details.append(el("summary", "", `另有 ${additional.length} 条相关资料`),
-        el("p", "", "以下资料由检索找到，未作为本次回答的引用依据。"));
-      additional.forEach((source) => details.append(sourceCard(source)));
-      target.append(details);
-    }
-    if (data.context_compacted) target.append(el("p", "context-note", "已整理较早的对话，可继续补充情况。"));
+    if (data.notice) card.append(el("p", "answer-notice", data.notice));
+    if (data.context_compacted) card.append(el("p", "context-note", "已整理较早的对话，可继续补充情况。"));
+    target.replaceChildren(card);
   }
 
   function updateInput() {
     input.setCustomValidity("");
     $("#ask-count").textContent = `${input.value.length} / 2000`;
+    input.style.height = "auto";
+    input.style.height = `${Math.max(56, Math.min(input.scrollHeight, 144))}px`;
   }
 
   function setBusy(busy) {
     $$("button, textarea", form).forEach((control) => { control.disabled = busy; });
-    $("#send-question span").textContent = busy ? "正在回答" : "发送问题";
+    $("#send-question span").textContent = busy ? "正在回答" : "发送";
     results.setAttribute("aria-busy", String(busy));
   }
 
@@ -228,7 +198,7 @@
       form.requestSubmit();
     }
   });
-  $$("[data-example]", form).forEach((control) => {
+  $$("[data-example]", welcome).forEach((control) => {
     control.addEventListener("click", () => {
       input.value = control.dataset.example;
       updateInput();
@@ -247,7 +217,8 @@
     $("#dialog-content").setAttribute("aria-busy", "false");
     chatState = { summary: "", messages: [] };
     pendingTurn = undefined;
-    results.replaceChildren(el("p", "empty-state", "直接提问开始临时聊天，回答和引用原文会保留在这里。"));
+    results.replaceChildren(welcome);
+    results.scrollTop = 0;
     input.value = "";
     updateInput();
     setBusy(false);
@@ -256,7 +227,7 @@
 
   function createTurn(question) {
     pendingTurn?.container.remove();
-    $(".empty-state", results)?.remove();
+    welcome.remove();
     const container = el("article", "chat-turn");
     const user = el("section", "user-message");
     user.append(el("h2", "message-label", "你"), el("p", "", question));
@@ -754,15 +725,16 @@
   function switchView(focus = false) {
     if (location.hash === "#main-content") return;
     activeView = location.hash === "#knowledge" ? "knowledge" : "ask";
+    $("body").dataset.view = activeView;
     $("#view-ask").hidden = activeView !== "ask";
     $("#view-knowledge").hidden = activeView !== "knowledge";
-    $$("[data-view]").forEach((link) => {
+    $$(".page-nav [data-view]").forEach((link) => {
       if (link.dataset.view === activeView) link.setAttribute("aria-current", "page");
       else link.removeAttribute("aria-current");
     });
     document.title = `${activeView === "ask" ? "在线问答" : "上传资料"} · 湖北交通法规助手`;
     if (activeView === "knowledge") loadDocuments();
-    else cancelLibraryRead();
+    else { cancelLibraryRead(); updateInput(); }
     if (focus) {
       const heading = $(activeView === "ask" ? "#page-title" : "#knowledge-title");
       heading.tabIndex = -1;

@@ -52,10 +52,12 @@ body[data-view="ask"] main { display: flex; flex-direction: column; flex: 1; min
 .intro p { margin-top: 17px; font-size: 15px; color: var(--muted); }
 .chat-composer { flex-shrink: 0; border-top: 1px solid var(--line); padding: 16px 28px 12px; background: #f9faf5; }
 .chat-composer:focus-within { border-top-color: #8daa96; }
-#follow-up-panel { max-height: min(24dvh, 200px); overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; margin-bottom: 10px; padding: 2px 4px 10px; border-bottom: 1px solid var(--line); scrollbar-width: thin; }
-.follow-up-title { color: var(--green); font-size: 13px; font-weight: 600; margin-bottom: 7px; }
-.follow-up-questions { margin: 0; padding-inline-start: 1.5em; font-size: 13px; line-height: 1.65; }
-.follow-up-questions li + li { margin-top: 3px; }
+#follow-up-panel { margin-bottom: 6px; }
+.follow-up-strip { display: flex; gap: 6px; overflow-x: auto; overscroll-behavior-x: contain; padding: 3px; scrollbar-width: thin; }
+.follow-up-chip { flex: 0 0 auto; max-width: min(26em, 84%); min-height: 30px; padding: 4px 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.follow-up-chip:focus-visible { outline-offset: 0; }
+.follow-up-chip[aria-pressed="true"] { border-color: #88a78e; background: #e2ebdb; color: var(--green-dark); }
+.follow-up-detail { max-height: min(5.1em, 14dvh); margin: 2px 3px 0; overflow-y: auto; overflow-wrap: anywhere; font-size: 13px; line-height: 1.7; color: var(--ink); }
 .question-card { padding: 0; }
 textarea { display: block; resize: none; min-height: 56px; max-height: 144px; width: 100%; border: 0; outline: none; padding: 0 0 8px; background: transparent; color: var(--ink); font-size: 16px; line-height: 1.7; border-radius: 4px; }
 textarea:focus-visible { outline: 0; }
@@ -71,8 +73,9 @@ textarea::placeholder { color: #859087; }
 .secondary { border-color: var(--line); background: var(--paper); color: var(--green); }
 .secondary:hover:not(:disabled) { background: #edf3eb; border-color: #b5c8b5; }
 .examples { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; margin-top: 24px; }
-.examples button { background: #f2f5ee; color: #516756; border: 1px solid #e3e9dc; border-radius: 8px; padding: 10px 13px; font-size: 12px; }
-.examples button:hover:not(:disabled) { background: #e4edde; }
+.examples button, .follow-up-chip { background: #f2f5ee; color: #516756; border: 1px solid #e3e9dc; border-radius: 8px; font-size: 12px; }
+.examples button { padding: 10px 13px; }
+.examples button:hover:not(:disabled), .follow-up-chip:hover { background: #e4edde; }
 .input-hint { margin-top: 10px; color: var(--muted); font-size: 11px; line-height: 1.8; }
 .chat-toolbar { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 14px; padding: 17px 28px; border-bottom: 1px solid #e9ede5; }
 .chat-toolbar h1 { font-size: 17px; font-weight: 600; line-height: 1.5; }
@@ -217,7 +220,6 @@ dialog::backdrop { background: #142d266e; backdrop-filter: blur(3px); }
   .chat-toolbar h1 { font-size: 16px; }
   .results { padding: 22px 18px; }
   .chat-composer { padding: 12px 17px 10px; }
-  #follow-up-panel { max-height: min(20dvh, 150px); }
   .user-message { max-width: 94%; padding: 11px 14px; }
   .user-message p, .answer-claim { font-size: 14px; }
   .chat-welcome { padding: 16px 0; }
@@ -261,7 +263,7 @@ dialog::backdrop { background: #142d266e; backdrop-filter: blur(3px); }
   .results { padding-block: 10px; }
   .chat-composer { padding-block: 10px; }
   #ask-question { min-height: 36px; max-height: min(15dvh, 72px); }
-  #follow-up-panel { max-height: min(12dvh, 64px); }
+  .follow-up-detail { max-height: min(3.4em, 12dvh); }
 }
 @media (max-height: 420px) {
   body[data-view="ask"] .site-header { padding-block: 4px; }
@@ -271,8 +273,7 @@ dialog::backdrop { background: #142d266e; backdrop-filter: blur(3px); }
   #ask-question { flex: 1; min-width: 0; padding-bottom: 0; }
   .question-toolbar { flex-shrink: 0; padding: 0; }
   .composer-tools .text-link, .keyboard-hint { display: none; }
-  #follow-up-panel { max-height: min(20dvh, 76px); margin-bottom: 4px; padding-block: 0 4px; }
-  .follow-up-title { margin-bottom: 3px; }
+  #follow-up-panel { margin-bottom: 3px; }
   .results { padding-block: 6px; }
 }
 @media (max-height: 420px) and (max-width: 600px) {

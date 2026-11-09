@@ -260,14 +260,14 @@ test("a free-form clarification accepts typed facts while its notice stays in th
   const panel = app.$("#follow-up-panel");
   assert.equal(panel.hidden, false);
   assert.ok(panel.textContent.includes(data.follow_up_questions[0]));
-  assert.equal(panel.querySelectorAll("button").length, 0);
+  assert.deepEqual(panel.querySelectorAll("button").map((chip) => chip.textContent), data.follow_up_questions);
   assert.equal(app.$("#ask-results").textContent.includes(data.follow_up_questions[0]), false);
   assert.equal(reply.querySelectorAll(".citation").length, 0);
   app.send("没有设置非机动车道。");
   assert.deepEqual(app.asks()[1].body, { question: "没有设置非机动车道。", chat_state: data.chat_state });
 });
 
-test("shows at most three current questions as text and submits only what the user types", async () => {
+test("question chips show full prompts on demand and submit only what the user types", async () => {
   const app = await setup();
   const first = answer("骑车穿行会怎么处理？");
   first.follow_up_questions = [
@@ -282,19 +282,41 @@ test("shows at most three current questions as text and submits only what the us
   assert.equal(panel.hidden, false);
   assert.ok(app.$(".chat-composer").contains(panel));
   assert.equal(history.contains(panel), false);
-  assert.deepEqual(panel.querySelectorAll("li").map((item) => item.textContent), first.follow_up_questions.slice(0, 3));
-  assert.equal(panel.querySelectorAll("button, input, textarea").length, 0);
+  const chips = panel.querySelectorAll("button");
+  assert.deepEqual(chips.map((chip) => chip.textContent), first.follow_up_questions.slice(0, 3));
+  assert.ok(chips.every((chip) => chip.type === "button"));
+  const detail = panel.querySelector("#follow-up-detail");
+  assert.equal(detail.hidden, true);
   for (const question of first.follow_up_questions) assert.equal(history.textContent.includes(question), false);
   assert.equal(input.value, "");
 
   const typed = "我骑的是电动自行车。现场在武汉，没有发生碰撞。";
   input.value = typed;
   input.dispatch("input");
+  for (const chip of chips) Object.assign(chip, { scrollWidth: 180, clientWidth: 70 });
+  chips[0].click();
+  assert.equal(detail.hidden, false);
+  assert.equal(detail.textContent, chips[0].textContent);
+  assert.equal(app.document.activeElement, input);
+  chips[1].click();
+  assert.equal(chips[0].attributes["aria-pressed"], "false");
+  assert.equal(chips[1].attributes["aria-pressed"], "true");
+  assert.equal(detail.textContent, chips[1].textContent);
+  chips[1].click();
+  assert.equal(detail.hidden, true);
+  chips[2].clientWidth = chips[2].scrollWidth;
+  chips[2].click();  // Short visible questions don't need a second copy.
+  assert.equal(detail.hidden, true);
+  assert.ok(input.attributes["aria-describedby"].includes(chips[2].id));
+  assert.equal(input.value, typed);
   assert.equal(app.asks().length, 1);
+  for (const question of first.follow_up_questions) assert.equal(history.textContent.includes(question), false);
   app.$("#ask-form").requestSubmit();
   assert.deepEqual(app.asks()[1].body, { question: typed, chat_state: first.chat_state });
   assert.equal(panel.hidden, true);
   assert.equal(panel.textContent, "");
+  chips[0].click();  // An old question no longer controls the current composer.
+  assert.equal(input.attributes["aria-describedby"].includes(chips[0].id), false);
   const second = answer(typed, { messages: first.chat_state.messages, suffix: "二" });
   second.follow_up_questions = [];
   await app.respond(app.asks()[1], second);
@@ -350,7 +372,7 @@ test("failed and cancelled retries retain successful state without duplicate car
   const retried = answer("补充情况", { messages: first.chat_state.messages });
   retried.follow_up_questions = ["事发时是否在机动车道内行驶？", "现场有没有非机动车道？"];
   await app.respond(app.asks()[3], retried);
-  assert.deepEqual(panel.querySelectorAll("li").map((item) => item.textContent), retried.follow_up_questions);
+  assert.deepEqual(panel.querySelectorAll("button").map((chip) => chip.textContent), retried.follow_up_questions);
   assert.equal(app.document.querySelectorAll(".chat-turn").length, 2);
   assert.equal(app.document.querySelectorAll(".answer-card").length, 2);
 });

@@ -183,13 +183,35 @@
 
   function renderFollowUps(questions = []) {
     const prompts = questions.slice(0, 3);
+    input.setAttribute("aria-describedby", "ask-hint ask-count");
     followUpPanel.replaceChildren();
     followUpPanel.hidden = !prompts.length;
     if (!prompts.length) return;
-    const list = el("ol", "follow-up-questions");
-    for (const question of prompts) list.append(el("li", "", question));
-    followUpPanel.append(el("h2", "follow-up-title", "请在聊天框中补充"), list);
-    followUpPanel.scrollTop = 0;
+    const strip = el("div", "follow-up-strip");
+    const detail = el("p", "follow-up-detail");
+    detail.id = "follow-up-detail";
+    detail.tabIndex = 0;
+    detail.hidden = true;
+    let selected;
+    for (const [index, question] of prompts.entries()) {
+      const chip = button(question, "follow-up-chip", () => {
+        if (!followUpPanel.contains(chip)) return;
+        selected?.setAttribute("aria-pressed", "false");
+        selected = selected === chip ? null : chip;
+        chip.setAttribute("aria-pressed", String(Boolean(selected)));
+        detail.hidden = !selected || chip.scrollWidth <= chip.clientWidth;
+        detail.textContent = detail.hidden ? "" : question;
+        detail.scrollTop = 0;
+        input.setAttribute("aria-describedby", selected ? `${chip.id} ask-hint ask-count` : "ask-hint ask-count");
+        input.focus({ preventScroll: true });
+      });
+      chip.id = `follow-up-question-${index + 1}`;
+      chip.title = question;
+      chip.setAttribute("aria-pressed", "false");
+      chip.setAttribute("aria-controls", detail.id);
+      strip.append(chip);
+    }
+    followUpPanel.append(strip, detail);
   }
 
   function updateInput() {

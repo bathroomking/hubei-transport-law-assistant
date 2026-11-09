@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from io import BytesIO
 from types import SimpleNamespace
@@ -25,6 +26,19 @@ def fake_conversion(monkeypatch, *, status=ConversionStatus.SUCCESS, text="Extra
     converter = SimpleNamespace(convert=lambda stream: result)
     monkeypatch.setattr(ingest, "_converter", lambda: converter)
     return calls
+
+
+@pytest.mark.parametrize(
+    "filename,data,code",
+    [
+        ("example.docx", b"example", "unsupported_document"),
+        ("bad.pdf", b"not a PDF", "pdf_read_failed"),
+    ],
+)
+def test_rejects_unsupported_or_unreadable_uploads(filename, data, code):
+    with pytest.raises(AppError) as error:
+        ingest.load_document(data, filename=filename, sha256=hashlib.sha256(data).hexdigest())
+    assert error.value.code == code
 
 
 @pytest.mark.parametrize("status", [ConversionStatus.PARTIAL_SUCCESS, ConversionStatus.FAILURE])
@@ -75,7 +89,7 @@ def test_vector_only_page_is_not_treated_as_blank(monkeypatch):
     assert error.value.code == "pdf_needs_ocr"
 
 
-def test_scan_and_same_page_mixed_content_use_real_ocr(tmp_path):
+def test_scan_and_same_page_mixed_content_use_real_ocr():
     # Rasterize a generated page so no hidden PDF text layer can make this pass.
     source = pypdfium2.PdfDocument(pdf_bytes("检查电源连接，保存检查记录。"))
     page = source[0]
@@ -92,9 +106,11 @@ def test_scan_and_same_page_mixed_content_use_real_ocr(tmp_path):
     canvas.drawString(50, 760, "Native heading")
     canvas.drawImage(ImageReader(image), 0, 0, width=612, height=720)
     canvas.save()
-    path = tmp_path / "scan-and-mixed.pdf"
-    path.write_bytes(output.getvalue())
-    loaded = ingest.load_document(path)
+    data = output.getvalue()
+    checksum = hashlib.sha256(data).hexdigest()
+    loaded = ingest.load_document(data, filename="扫描和混排.PDF", sha256=checksum)
+    assert loaded.file == "扫描和混排.PDF"
+    assert loaded.sha256 == checksum
     assert [page.pdf_page for page in loaded.pages] == [1, 2]
     assert all("保存检查记录" in "".join(page.text.split()) for page in loaded.pages)
     assert "Native heading" in loaded.pages[1].text

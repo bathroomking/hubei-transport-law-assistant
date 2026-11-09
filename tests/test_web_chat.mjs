@@ -172,6 +172,7 @@ test("successive questions keep follow-ups in answers and open each turn's citat
   app.send("已经恢复原状");
   assert.deepEqual(app.asks()[1].body.chat_state, first.chat_state);
   const second = answer("已经恢复原状", { summary: "早期情况", compacted: true, suffix: "二" });
+  second.sources[0].source.pdf_page_end = 2;
   await app.respond(app.asks()[1], second);
   assert.equal(app.document.querySelectorAll(".chat-turn").length, 2);
   assert.equal(app.document.querySelectorAll(".user-message").length, 2);
@@ -191,6 +192,7 @@ test("successive questions keep follow-ups in answers and open each turn's citat
   assert.equal(app.calls.at(-1).path, "/api/v1/articles/article-%E4%BA%8C");
   await app.respond(app.calls.at(-1), second.sources[0]);
   assert.equal(app.$("#dialog-content .original-text").textContent, "原文二");
+  assert.ok(app.$("#dialog-content").textContent.includes("PDF 第 1–2 页"));
   app.$("#close-dialog").click();
   app.send("还有哪些依据");
   assert.deepEqual(app.asks()[2].body.chat_state, second.chat_state);

@@ -26,6 +26,8 @@ class Source(Model):
     file: Text
     sha256: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
     pdf_page: int = Field(ge=1)
+    # 单页来源保持原有序列化，兼容历史向量元数据中的 chunk_json。
+    pdf_page_end: int | None = Field(default=None, ge=1, exclude_if=lambda value: value is None)
     source_type: Literal["pdf"] = "pdf"
     locator: Text | None = None
     retrieved_on: date | None = None

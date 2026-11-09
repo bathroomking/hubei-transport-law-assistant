@@ -59,8 +59,8 @@ def load_law_document(
         version_id=version_id,
         title=articles[0].source.document_title,
         coverage_note=(
-            "以下为用户上传文件已入库的文字片段，可能包含重叠内容；"
-            "不表示已收录整部法规，文字提取完整性、法律效力及适用性尚待核验。"
+            "以下按原文顺序展示上传文件中已入库的文字，不表示已收录整部法规。"
+            "文字提取是否完整、法规效力及适用性仍需核验。"
         ),
         articles=articles,
     )

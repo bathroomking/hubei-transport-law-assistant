@@ -126,7 +126,9 @@
   }
 
   function sourceLocation(source) {
-    return `PDF 第 ${source.pdf_page} 页${source.printed_page ? ` · 印刷页码 ${source.printed_page}` : ""}`;
+    const pages = source.pdf_page_end > source.pdf_page
+      ? `${source.pdf_page}–${source.pdf_page_end}` : source.pdf_page;
+    return `PDF 第 ${pages} 页${source.printed_page ? ` · 印刷页码 ${source.printed_page}` : ""}`;
   }
 
   function appendSourceLinks(target, source) {

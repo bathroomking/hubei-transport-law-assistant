@@ -10,16 +10,20 @@ import unicodedata
 import uuid
 from collections import Counter
 from contextlib import contextmanager
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import BinaryIO
+from typing import TYPE_CHECKING, BinaryIO
 
 from transport_law.config import Settings
 from transport_law.embeddings import DashScopeEmbeddings, Embeddings
 from transport_law.errors import AppError
 from transport_law.schemas import LegalChunk, SearchHit, Source
 from transport_law.vector_store import check_contract, chroma_client, chroma_errors, digest
+
+if TYPE_CHECKING:
+    from transport_law.chunking import DraftSource
+    from transport_law.ingest import LoadedDocument
 
 
 def _now() -> str:
@@ -30,6 +34,18 @@ def _pipeline_version() -> str:
     from transport_law.chunking import PIPELINE_VERSION
 
     return PIPELINE_VERSION
+
+
+def _cache_digest(snapshot: bytes, drafts: bytes) -> str:
+    return hashlib.sha256(hashlib.sha256(snapshot).digest() + drafts).hexdigest()
+
+
+def _locator(number: int, source: DraftSource, key: str) -> str:
+    ranges = "；".join(
+        f"PDF 第 {loc.pdf_page} 页，字符 [{loc.start_index}, {loc.end_index})"
+        for loc in source.locations
+    )
+    return f"片段序号 {number}；{ranges}；解析器 {source.parser}；提取快照 {key}"
 
 
 def _filename(value: str) -> tuple[str, str, str]:
@@ -112,6 +128,8 @@ class KnowledgeStore:
                 "pipeline_version": "TEXT NOT NULL DEFAULT 'pdf_legal_recursive_v1:800:120'",
                 "cache_key": "TEXT NOT NULL DEFAULT ''",
                 "rebuild_pending": "INTEGER NOT NULL DEFAULT 0",
+                "reuse_cache_key": "TEXT NOT NULL DEFAULT ''",
+                "cache_digest": "TEXT NOT NULL DEFAULT ''",
             }.items():
                 if name not in columns:
                     try:
@@ -162,7 +180,16 @@ class KnowledgeStore:
         return {
             key: value
             for key, value in row.items()
-            if key not in {"name_key", "contract_hash", "suffix", "cache_key", "rebuild_pending"}
+            if key
+            not in {
+                "name_key",
+                "contract_hash",
+                "suffix",
+                "cache_key",
+                "cache_digest",
+                "reuse_cache_key",
+                "rebuild_pending",
+            }
         }
 
     def _update(self, ident: str, **values) -> None:
@@ -294,17 +321,21 @@ class KnowledgeStore:
         return self.get_document(ident)
 
     def reprocess(self, ident: str) -> dict:
-        """保留原件，显式重新提取；准备新分块成功前保留旧正文和向量。"""
+        """升级分块时可复用已核验的提取快照，同版本重新解析仍从原 PDF 提取。"""
         row = self._row(ident)
         with self._lock(row["id"]):
             row = self._row(ident)
             self._verified_source(row)
+            pipeline = _pipeline_version()
+            upgrade_ready = row["status"] == "ready" and row["pipeline_version"] != pipeline
             self._update(
                 ident,
                 status="queued",
                 contract_hash=digest(self.contract),
-                pipeline_version=_pipeline_version(),
+                pipeline_version=pipeline,
                 cache_key=uuid.uuid4().hex,
+                reuse_cache_key=row["cache_key"] if upgrade_ready else "",
+                cache_digest="",
                 rebuild_pending=1,
                 chunk_count=0,
                 embedded_count=0,
@@ -313,17 +344,17 @@ class KnowledgeStore:
             )
         return self.get_document(ident)
 
-    def _verified_source(self, row: dict) -> Path:
+    def _verified_source(self, row: dict) -> bytes:
         raw = self.path / "documents" / row["id"] / ("source" + row["suffix"])
         try:
-            checksum = hashlib.sha256(raw.read_bytes()).hexdigest()
+            data = raw.read_bytes()
         except OSError as exc:
             raise AppError(
                 "upload_source_missing", "保存的原文件无法读取，请恢复原件后重试。", 409
             ) from exc
-        if checksum != row["sha256"]:
+        if hashlib.sha256(data).hexdigest() != row["sha256"]:
             raise AppError("upload_source_changed", "保存的原文件已改变，停止导入。", 409)
-        return raw
+        return data
 
     def _collection(self, *, create: bool = False):
         with chroma_errors():
@@ -348,6 +379,70 @@ class KnowledgeStore:
             check_contract(collection, self.contract)
             return collection
 
+    def _reusable_extraction(self, row: dict, folder: Path) -> LoadedDocument | None:
+        """核对旧快照每段文字及页内位置；不能证明来源的旧缓存交给当前 PDF 解析器。"""
+        key = row["reuse_cache_key"]
+        if not key:
+            return None
+        from pydantic import TypeAdapter
+
+        from transport_law.chunking import DraftSource
+        from transport_law.ingest import PARSER_ID, LoadedDocument
+
+        try:
+            snapshot = TypeAdapter(LoadedDocument).validate_json(
+                (folder / f"extraction-{key}.json").read_bytes(), strict=True
+            )
+            if (
+                snapshot.parser != PARSER_ID
+                or snapshot.file != row["filename"]
+                or snapshot.sha256 != row["sha256"]
+                or not snapshot.pages
+                or any(p.pdf_page != i for i, p in enumerate(snapshot.pages, 1))
+            ):
+                return None
+            with self._connect() as connection:
+                records = connection.execute(
+                    "SELECT id, chunk_json FROM chunks WHERE document_id = ?", (row["id"],)
+                ).fetchall()
+            published = {r[0]: LegalChunk.model_validate_json(r[1]) for r in records}
+            if not published:
+                return None
+            covered = [bytearray(len(p.text)) for p in snapshot.pages]
+            lines = (folder / f"chunks-{key}.jsonl").read_text().splitlines()
+            for number, line in enumerate(lines, 1):
+                draft = json.loads(line)
+                source = DraftSource.model_validate(draft["source"])
+                chunk = published.pop("UP-" + draft["id"].removeprefix("AUTO-"))
+                if (
+                    source.parser != snapshot.parser
+                    or source.sha256 != snapshot.sha256
+                    or chunk.source.sha256 != snapshot.sha256
+                    or chunk.source.locator != _locator(number, source, key)
+                ):
+                    return None
+                parts = []
+                for loc in source.locations:
+                    page = snapshot.pages[loc.pdf_page - 1]
+                    if loc.end_index > len(page.text):
+                        return None
+                    parts.append(page.text[loc.start_index : loc.end_index])
+                    covered[loc.pdf_page - 1][loc.start_index : loc.end_index] = b"\x01" * (
+                        loc.end_index - loc.start_index
+                    )
+                if "".join(parts) != chunk.text or draft["text"] != chunk.text:
+                    return None
+            # 旧通用分块允许跳过空白，不可把后来插入的非空内容当作已核验文字。
+            if published or any(
+                not marked and not char.isspace()
+                for page, mask in zip(snapshot.pages, covered, strict=True)
+                for char, marked in zip(page.text, mask, strict=True)
+            ):
+                return None
+            return snapshot
+        except (ValueError, OSError, KeyError, IndexError, TypeError, AttributeError):
+            return None
+
     def _chunks(self, row: dict) -> list[LegalChunk]:
         # 这些依赖只在导入任务中加载，启动和读取已完成记录均不执行提取或切分。
         from transport_law.chunking import ChunkingOptions, DraftChunk, build_draft_chunks
@@ -359,12 +454,21 @@ class KnowledgeStore:
             raise AppError("processing_version_mismatch", "分块缓存版本已更新，请重新解析。", 409)
         cache = folder / f"chunks-{row['cache_key']}.jsonl"
         extraction = folder / f"extraction-{row['cache_key']}.json"
-        if cache.exists():
-            drafts = [
-                DraftChunk.model_validate_json(line) for line in cache.read_text().splitlines()
-            ]
+        if row["cache_digest"]:
+            try:
+                snapshot_bytes = extraction.read_bytes()
+                draft_bytes = cache.read_bytes()
+            except OSError as exc:
+                raise AppError(
+                    "upload_cache_mismatch", "已保存的分块或提取快照缺失。", 409
+                ) from exc
+            if _cache_digest(snapshot_bytes, draft_bytes) != row["cache_digest"]:
+                raise AppError("upload_cache_mismatch", "分块或提取快照已改变，请重新解析。", 409)
+            drafts = [DraftChunk.model_validate_json(line) for line in draft_bytes.splitlines()]
         else:
-            loaded = replace(load_document(raw), file=row["filename"])
+            loaded = self._reusable_extraction(row, folder) or load_document(
+                raw, filename=row["filename"], sha256=row["sha256"]
+            )
             if any(not page.text.strip() and not page.is_blank for page in loaded.pages):
                 raise AppError(
                     "pdf_needs_ocr", "PDF 有非空白页面未能提取文字，请检查原文件或 OCR 结果。", 400
@@ -374,21 +478,19 @@ class KnowledgeStore:
             )
             if not drafts:
                 raise AppError("no_extractable_text", "文件中没有可切分的文字。", 400)
-            temporary = extraction.with_suffix(".part")
-            with temporary.open("w", encoding="utf-8") as output:
-                json.dump(asdict(loaded), output, ensure_ascii=False)
-                output.flush()
-                os.fsync(output.fileno())
-            temporary.replace(extraction)
-            temporary = cache.with_suffix(".part")
-            with temporary.open("w", encoding="utf-8") as output:
-                for draft in drafts:
-                    output.write(draft.model_dump_json() + "\n")
-                output.flush()
-                os.fsync(output.fileno())
-            temporary.replace(cache)
+            snapshot_bytes = json.dumps(asdict(loaded), ensure_ascii=False).encode()
+            draft_bytes = "".join(draft.model_dump_json() + "\n" for draft in drafts).encode()
+            for target, content in ((extraction, snapshot_bytes), (cache, draft_bytes)):
+                temporary = target.with_suffix(".part")
+                with temporary.open("wb") as output:
+                    output.write(content)
+                    output.flush()
+                    os.fsync(output.fileno())
+                temporary.replace(target)
+            # 两个文件均完整落盘后才记录指纹。中途退出时重试从原件/旧快照重建。
+            self._update(row["id"], cache_digest=_cache_digest(snapshot_bytes, draft_bytes))
         try:
-            snapshot = json.loads(extraction.read_text(encoding="utf-8"))
+            snapshot = json.loads(snapshot_bytes)
             page_text = {page["pdf_page"]: page["text"] for page in snapshot["pages"]}
             if snapshot["sha256"] != row["sha256"]:
                 raise ValueError("source snapshot mismatch")
@@ -420,13 +522,8 @@ class KnowledgeStore:
                 raise AppError(
                     "upload_cache_mismatch", "分块不能回查提取原文，请重新解析。", 409
                 ) from exc
-            locator = f"片段序号 {number}；" + "；".join(
-                f"PDF 第 {loc.pdf_page} 页，字符 [{loc.start_index}, {loc.end_index})"
-                for loc in draft.source.locations
-            )
-            parser = getattr(draft.source, "parser", None)
-            if parser:
-                locator += f"；解析器 {parser}；提取快照 {row['cache_key']}"
+            first_page = draft.source.locations[0].pdf_page
+            last_page = draft.source.locations[-1].pdf_page
             chunks.append(
                 LegalChunk(
                     id="UP-" + draft.id.removeprefix("AUTO-"),
@@ -435,6 +532,7 @@ class KnowledgeStore:
                     item_id=getattr(draft, "parent_id", None) or row["id"],
                     title=draft.title,
                     article=draft.heading or f"片段 {number}",
+                    article_number=draft.article_number,
                     kind="document",
                     region="未标注",
                     domain="上传资料",
@@ -445,8 +543,9 @@ class KnowledgeStore:
                         file=row["filename"],
                         sha256=row["sha256"],
                         source_type=draft.source.format,
-                        pdf_page=draft.source.locations[0].pdf_page,
-                        locator=locator,
+                        pdf_page=first_page,
+                        pdf_page_end=last_page if last_page != first_page else None,
+                        locator=_locator(number, draft.source, row["cache_key"]),
                         verification_status="pending",
                         verification_note="用户上传资料，自动提取与分块；文字、表格关系、法律效力及适用性待核验。",
                     ),
@@ -465,7 +564,8 @@ class KnowledgeStore:
                 [(chunk.id, ident, chunk.model_dump_json()) for chunk in chunks],
             )
             connection.execute(
-                "UPDATE documents SET rebuild_pending = 0, chunk_count = ? WHERE id = ?",
+                "UPDATE documents SET rebuild_pending = 0, reuse_cache_key = '', "
+                "chunk_count = ? WHERE id = ?",
                 (len(chunks), ident),
             )
 

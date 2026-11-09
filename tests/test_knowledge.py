@@ -285,10 +285,11 @@ def test_nonblank_page_without_ocr_text_cannot_be_silently_skipped(upload_setup,
     settings, embedder = upload_setup
     data = pdf_bytes("Digital page.", "")
 
-    def incompletely_parsed(path):
+    def incompletely_parsed(raw, *, filename, sha256):
+        assert raw == data
         return ingest.LoadedDocument(
-            path.name,
-            hashlib.sha256(data).hexdigest(),
+            filename,
+            sha256,
             "pdf",
             [
                 ingest.DocumentPage("Digital page.", 1),
@@ -842,14 +843,26 @@ def test_interrupted_rebuild_after_vector_removal_can_resume(upload_setup, monke
     assert store.ready_chunks()
 
 
-@pytest.mark.parametrize("corruption", ["missing_snapshot", "altered_chunk", "invalid_range"])
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "missing_snapshot",
+        "altered_chunk",
+        "invalid_range",
+        "truncated",
+        "heading",
+        "article_number",
+    ],
+)
 def test_retry_rejects_untraceable_cache_before_embedding(upload_setup, corruption):
     from transport_law.knowledge import KnowledgeStore
 
     settings, embedder = upload_setup
     embedder.fail_on_call = 1
     store = KnowledgeStore(settings, embedder)
-    ident = store.receive("cache-integrity.pdf", BytesIO(pdf_bytes("Traceable source.")))["id"]
+    ident = store.receive(
+        "cache-integrity.pdf", BytesIO(pdf_bytes("Traceable source.", "Another source page."))
+    )["id"]
     store.process(ident)
     assert store.get_document(ident)["status"] == "failed"
     row = store._row(ident)
@@ -861,8 +874,13 @@ def test_retry_rejects_untraceable_cache_before_embedding(upload_setup, corrupti
         chunks = [json.loads(line) for line in cache.read_text().splitlines()]
         if corruption == "altered_chunk":
             chunks[0]["text"] += "Not from source."
-        else:
+        elif corruption == "invalid_range":
             chunks[0]["source"]["locations"][0]["end_index"] = 999999
+        elif corruption == "truncated":
+            assert len(chunks) == 2
+            chunks.pop()
+        else:
+            chunks[0][corruption] = 89 if corruption == "article_number" else "第八十九条"
         cache.write_text("\n".join(json.dumps(chunk) for chunk in chunks) + "\n")
     embedder.fail_on_call = None
     store.retry(ident)
@@ -870,6 +888,61 @@ def test_retry_rejects_untraceable_cache_before_embedding(upload_setup, corrupti
     assert store.get_document(ident)["error_code"] == "upload_cache_mismatch"
     assert len(embedder.calls) == 1
     assert (folder / "source.pdf").exists()
+
+
+@pytest.mark.parametrize("corruption", [None, "parser_version", "uncovered_text"])
+def test_chunker_upgrade_verifies_extraction_before_reuse(upload_setup, monkeypatch, corruption):
+    from transport_law import ingest
+    from transport_law.knowledge import KnowledgeStore
+
+    settings, embedder = upload_setup
+    store = KnowledgeStore(settings, embedder)
+    data = pdf_bytes("Page one.", "Page two.")
+    parses = []
+
+    def parse(raw, *, filename, sha256):
+        assert raw == data
+        parses.append(filename)
+        return ingest.LoadedDocument(
+            filename,
+            sha256,
+            "pdf",
+            [
+                ingest.DocumentPage("## 第一条\n第一款。\n", 1),
+                ingest.DocumentPage("第二款。\n## 第二条\n其他规定。", 2),
+            ],
+            parser=ingest.PARSER_ID,
+        )
+
+    monkeypatch.setattr(ingest, "load_document", parse)
+    ident = store.receive("跨页条文.pdf", BytesIO(data))["id"]
+    store.process(ident)
+    before = store._row(ident)
+    assert before["status"] == "ready"
+    folder = settings.knowledge_path / "documents" / ident
+    snapshot_file = folder / f"extraction-{before['cache_key']}.json"
+    if corruption:
+        value = json.loads(snapshot_file.read_bytes())
+        if corruption == "parser_version":
+            value["parser"] = "prior-parser"
+        else:
+            value["pages"][-1]["text"] += "无来源的新规定。"
+        snapshot_file.write_text(json.dumps(value, ensure_ascii=False))
+    store._update(ident, pipeline_version=ingest.PARSER_ID + ":previous-chunker")
+    store.reprocess(ident)
+    store.process(ident)
+
+    assert len(parses) == (2 if corruption else 1)
+    assert store._row(ident)["status"] == "ready"
+    first, second = sorted(store.ready_chunks(), key=lambda c: c.article_number)
+    assert (first.article_number, first.source.pdf_page, first.source.pdf_page_end) == (1, 1, 2)
+    assert first.text == "## 第一条\n第一款。\n第二款。\n"
+    assert second.text == "## 第二条\n其他规定。"
+    assert "pdf_page_end" not in second.source.model_dump()
+    assert set(store._collection().get(where={"document_id": ident})["ids"]) == {
+        first.id,
+        second.id,
+    }
 
 
 def test_uploaded_text_preserves_exact_snapshot_slices_through_storage_and_api(
@@ -892,10 +965,11 @@ def test_uploaded_text_preserves_exact_snapshot_slices_through_storage_and_api(
         )
     )
 
-    def parsed_with_whitespace(path):
+    def parsed_with_whitespace(raw, *, filename, sha256):
+        assert raw == content
         return ingest.LoadedDocument(
-            path.name,
-            hashlib.sha256(content).hexdigest(),
+            filename,
+            sha256,
             "pdf",
             [ingest.DocumentPage(canonical, 1)],
             parser="test-layout-snapshot",
@@ -919,9 +993,8 @@ def test_uploaded_text_preserves_exact_snapshot_slices_through_storage_and_api(
             for line in (folder / f"chunks-{row['cache_key']}.jsonl").read_text().splitlines()
         ]
         assert any(draft["text"].startswith("  Permit") for draft in drafts)
-        assert any(draft["content_type"] == "table" for draft in drafts)
+        assert [draft["content_type"] for draft in drafts] == ["page"]
         assert all(draft["text"].endswith("\n") for draft in drafts)
-        assert 1 < len(drafts) <= 10
         with store._connect() as conn:
             persisted = {
                 record["id"]: json.loads(record["chunk_json"])

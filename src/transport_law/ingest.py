@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 from dataclasses import dataclass
@@ -10,12 +9,9 @@ from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from threading import RLock
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from transport_law.errors import AppError
-
-if TYPE_CHECKING:
-    from langchain_core.documents import Document
 
 
 @dataclass(frozen=True)
@@ -190,58 +186,8 @@ def _read_pdf(data: bytes) -> list[DocumentPage]:
         ) from exc
 
 
-def load_document(path: Path) -> LoadedDocument:
-    """在本机执行版面、表格和按需 OCR 解析，不上传原件到外部服务。"""
-    if path.suffix.lower() != ".pdf":
+def load_document(data: bytes, *, filename: str, sha256: str) -> LoadedDocument:
+    """解析调用方已核对 SHA-256 的原件字节；保存原文件名、物理页码和解析器版本。"""
+    if Path(filename).suffix.lower() != ".pdf":
         raise AppError("unsupported_document", "目前只支持 PDF 文件。", 400)
-    try:
-        data = path.read_bytes()
-    except OSError as exc:
-        raise AppError("document_read_failed", "无法读取文档，请检查文件路径和权限。", 400) from exc
-    return LoadedDocument(
-        path.name, hashlib.sha256(data).hexdigest(), "pdf", _read_pdf(data), PARSER_ID
-    )
-
-
-def to_documents(
-    document: LoadedDocument,
-    *,
-    document_id: str | None = None,
-    title: str | None = None,
-) -> list[Document]:
-    """将提取结果转为 LangChain Document；每页从一开始就携带来源信息。"""
-    try:
-        from langchain_core.documents import Document
-    except ImportError as exc:
-        raise AppError(
-            "chunking_dependency_missing", '请先安装分块依赖：pip install -e ".[ingest]"', 500
-        ) from exc
-    return [
-        Document(
-            page_content=page.text,
-            metadata={
-                "document_id": document_id or f"doc-{document.sha256[:20]}",
-                "version_id": f"sha256-{document.sha256[:20]}",
-                "title": title or Path(document.file).stem,
-                "source": {
-                    "file": document.file,
-                    "sha256": document.sha256,
-                    "format": document.format,
-                    "parser": document.parser,
-                },
-                "pdf_page": page.pdf_page,
-                "review_status": "needs_review",
-            },
-        )
-        for page in document.pages
-    ]
-
-
-def load_documents(
-    path: Path,
-    *,
-    document_id: str | None = None,
-    title: str | None = None,
-) -> list[Document]:
-    """读取文档并转换为携带来源信息的 LangChain Document。"""
-    return to_documents(load_document(path), document_id=document_id, title=title)
+    return LoadedDocument(filename, sha256, "pdf", _read_pdf(data), PARSER_ID)

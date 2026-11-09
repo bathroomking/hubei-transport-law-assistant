@@ -71,7 +71,7 @@ class Element {
   setCustomValidity(value) { this.validationMessage = value; }
   reportValidity() {}
   focus() { this.ownerDocument.activeElement = this; }
-  scrollIntoView() {}
+  scrollIntoView() { this.ownerDocument.viewportScrollTarget = this; }
   showModal() { this.open = true; }
   close() { this.open = false; this.dispatch("close"); }
   contains(node) { return node === this || this.children.some((child) => child.contains(node)); }
@@ -211,6 +211,22 @@ test("uncited retrieved text stays out of the chat and citations remain tied to 
   assert.equal(app.$("#ask-results").textContent.includes("未引用的检索原文"), false);
   assert.equal(app.$(".answer-card").textContent.includes(data.claims[0].text), true);
   assert.equal(app.$(".answer-card").querySelectorAll("script").length, 0);
+});
+
+test("sending reveals the newest turn inside the chat and a late answer leaves reading position alone", async () => {
+  const app = await setup();
+  app.send("第一个问题");
+  await app.respond(app.asks()[0], answer("第一个问题"));
+  const history = app.$("#ask-results");
+  history.scrollHeight = 1800;
+  history.scrollTop = 200;
+  app.send("新的问题");
+  assert.ok(history.scrollTop > 200);
+  assert.equal(app.document.viewportScrollTarget, undefined);
+  history.scrollTop = 45;  // The reader returns to an earlier message while waiting.
+  await app.respond(app.asks()[1], answer("新的问题"));
+  assert.equal(history.scrollTop, 45);
+  assert.equal(app.document.viewportScrollTarget, undefined);
 });
 
 test("a free-form clarification accepts typed facts while its notice stays in the answer", async () => {

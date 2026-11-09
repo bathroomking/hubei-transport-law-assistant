@@ -209,7 +209,7 @@
     control.addEventListener("click", () => {
       input.value = control.dataset.example;
       updateInput();
-      input.focus();
+      input.focus({ preventScroll: true });
     });
   });
   function clearChat(focus = false) {
@@ -230,7 +230,7 @@
     input.value = "";
     updateInput();
     setBusy(false);
-    if (focus) input.focus();
+    if (focus) input.focus({ preventScroll: true });
   }
 
   function createTurn(question) {
@@ -264,7 +264,8 @@
     renderFollowUps();
     setBusy(true);
     renderLoading(turn.response, "正在查找依据并在线回答…", () => controller.abort());
-    turn.container.scrollIntoView({ block: "start", behavior: "smooth" });
+    // 发送时只显示聊天记录末尾的新问题；答复到达时保留用户的阅读位置。
+    results.scrollTop = results.scrollHeight;
     try {
       const data = await request("/api/v1/ask", { body: { question, chat_state: chatState }, signal: controller.signal });
       if (!isCurrent()) return;

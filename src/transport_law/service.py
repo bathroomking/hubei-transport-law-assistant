@@ -14,6 +14,7 @@ from transport_law.schemas import (
     AnswerResponse,
     ChatMessage,
     ChatState,
+    FollowUpChoice,
     GeneratedAnswer,
     SearchRequest,
     Usage,
@@ -40,7 +41,7 @@ class LawService:
                 AnswerResponse(
                     status="insufficient_evidence",
                     answer="还需要确认你这次追问的具体意思。",
-                    follow_up_questions=[prepared.clarification],
+                    follow_up_choices=[FollowUpChoice(question=prepared.clarification, options=[])],
                 ),
             )
         # Chroma 检索包含同步 HTTP 请求，在工作线程执行，避免阻塞 FastAPI 事件循环。
@@ -54,7 +55,6 @@ class LawService:
                 AnswerResponse(
                     status="insufficient_evidence",
                     answer=INSUFFICIENT_ANSWER,
-                    follow_up_questions=["请补充具体问题或导入相关资料。"],
                 ),
             )
         source_documents = [hit.chunk for hit in hits]
@@ -100,7 +100,7 @@ class LawService:
                     status="insufficient_evidence",
                     answer=INSUFFICIENT_ANSWER,
                     source_documents=source_documents,
-                    follow_up_questions=generated.follow_up_questions,
+                    follow_up_choices=generated.follow_up_choices,
                     model=completion.model,
                 ),
             )
@@ -123,7 +123,7 @@ class LawService:
                 claims=generated.claims,
                 sources=[allowed[citation_id] for citation_id in cited_ids],
                 source_documents=source_documents,
-                follow_up_questions=generated.follow_up_questions,
+                follow_up_choices=generated.follow_up_choices,
                 model=completion.model,
             ),
         )
@@ -132,10 +132,8 @@ class LawService:
     def _finish(
         request: SearchRequest, prepared: PreparedConversation, answer: AnswerResponse
     ) -> AnswerResponse:
-        # 历史只保留对话与来源 ID，不累计每轮检索的整段法规。
-        assistant_text = answer.answer
-        if answer.follow_up_questions:
-            assistant_text += "\n待补充：\n" + "\n".join(answer.follow_up_questions)
+        answer.follow_up_questions = [choice.question for choice in answer.follow_up_choices]
+        # 未选的事实只属于本轮控件。只有用户实际发送的文字才进入后续对话。
         answer.chat_state = ChatState(
             summary=prepared.state.summary,
             messages=[
@@ -143,7 +141,7 @@ class LawService:
                 ChatMessage(role="user", content=request.question),
                 ChatMessage(
                     role="assistant",
-                    content=assistant_text,
+                    content=answer.answer,
                     citation_ids=[source.id for source in answer.sources],
                 ),
             ],

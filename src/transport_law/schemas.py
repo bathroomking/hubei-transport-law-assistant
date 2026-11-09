@@ -1,7 +1,17 @@
 from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    StringConstraints,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 Identifier = Annotated[str, StringConstraints(pattern=r"^[a-zA-Z0-9_.:-]+$", max_length=120)]
@@ -72,6 +82,16 @@ class ChatMessage(Model):
     ]
     citation_ids: list[Identifier] = Field(default_factory=list, max_length=10)
 
+    @field_validator("content")
+    @classmethod
+    def remove_legacy_assistant_suffix(cls, content: str, info: ValidationInfo) -> str:
+        # 旧客户端会原样回传服务生成的后缀。只剥离 assistant 消息中的固定分隔行。
+        if info.data.get("role") == "assistant":
+            body, marker, questions = content.rpartition("\n待补充：\n")
+            if marker and body.strip() and questions.strip():
+                return body
+        return content
+
 
 class ChatState(Model):
     """由页面内存携带；仅作未核实的聊天背景，不是法规证据。"""
@@ -123,12 +143,63 @@ class Claim(Model):
     citation_ids: list[Identifier] = Field(min_length=1, max_length=10)
 
 
+class FollowUpChoice(Model):
+    question: Annotated[Text, Field(max_length=600)]
+    options: list[Annotated[Text, Field(max_length=300)]] = Field(
+        default_factory=list, max_length=3
+    )
+
+    @field_validator("options", mode="wrap")
+    @classmethod
+    def independently_answerable(cls, value, validate) -> list[str]:
+        try:
+            options = validate(value)
+        except ValidationError:
+            return []
+        # 按钮发送后不携带问题；孤立的是/否、单个答案、重复答案均改为自由填写。
+        bare = {"是", "否", "是的", "不是", "有", "没有", "不确定", "其他", "不知道"}
+        if (
+            len(options) == 1
+            or len(set(options)) != len(options)
+            or any(text.rstrip("。.!！") in bare for text in options)
+        ):
+            return []
+        return options
+
+
 class GeneratedAnswer(Model):
     """模型只写解释和引用 ID，不能自行编造来源字段或适用状态。"""
 
     status: Literal["answered", "insufficient_evidence"] = "answered"
     claims: list[Claim] = Field(max_length=8)
-    follow_up_questions: list[Annotated[Text, Field(max_length=300)]] = Field(max_length=8)
+    follow_up_choices: list[FollowUpChoice] = Field(default_factory=list, max_length=2)
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_optional_choices(cls, value):
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        legacy = data.pop("follow_up_questions", [])
+        if "follow_up_choices" in data:
+            offered = data["follow_up_choices"]
+        else:
+            offered = (
+                [{"question": question} for question in legacy] if isinstance(legacy, list) else []
+            )
+        choices = []
+        if isinstance(offered, list):
+            for item in offered:
+                try:
+                    choice = FollowUpChoice.model_validate(item)
+                except ValidationError:
+                    continue  # 可选控件缺少有效问题时仍保留有据回答。
+                if any(previous.question == choice.question for previous in choices):
+                    continue
+                choices.append(choice)
+                if len(choices) == 2:
+                    break
+        return {**data, "follow_up_choices": choices}
 
     @model_validator(mode="after")
     def validate_answer_status(self):
@@ -152,6 +223,7 @@ class AnswerResponse(Model):
     sources: list[LegalChunk] = Field(default_factory=list)
     source_documents: list[LegalChunk] = Field(default_factory=list)
     follow_up_questions: list[str] = Field(default_factory=list)
+    follow_up_choices: list[FollowUpChoice] = Field(default_factory=list, max_length=2)
     applicability_status: Literal["not_verified"] = "not_verified"
     notice: str = "当前仅解释已收录材料；文件效力、适用地域和个案事实尚未完成核验。"
     model: str | None = None

@@ -160,14 +160,15 @@ function answer(question, { messages = [], summary = "", compacted = false, suff
   };
 }
 
-test("successive questions keep follow-ups in answers and open each turn's citation on demand", async () => {
+test("successive questions carry confirmed history, show free-form prompts by the composer and preserve citations", async () => {
   const app = await setup();
   app.send("未经许可施工");
   assert.deepEqual(app.asks()[0].body, { question: "未经许可施工", chat_state: { summary: "", messages: [] } });
   const first = answer("未经许可施工");
   await app.respond(app.asks()[0], first);
   assert.equal(app.$("#ask-question").value, "");
-  assert.equal(app.$(".answer-card").textContent.includes("还有什么情况？"), true);
+  assert.ok(app.$("#follow-up-panel").textContent.includes("还有什么情况？"));
+  assert.equal(app.$("#ask-results").textContent.includes("还有什么情况？"), false);
   assert.equal(app.$(".assistant-message").childElementCount, 1);
   app.send("已经恢复原状");
   assert.deepEqual(app.asks()[1].body.chat_state, first.chat_state);
@@ -213,7 +214,7 @@ test("uncited retrieved text stays out of the chat and citations remain tied to 
   assert.equal(app.$(".answer-card").querySelectorAll("script").length, 0);
 });
 
-test("clarifying questions and notices stay in the same assistant reply without citations", async () => {
+test("a free-form clarification accepts typed facts while its notice stays in the answer", async () => {
   const app = await setup();
   app.send("是的");
   const data = answer("是的");
@@ -221,10 +222,81 @@ test("clarifying questions and notices stay in the same assistant reply without 
   await app.respond(app.asks()[0], data);
   const reply = app.$(".assistant-message");
   assert.equal(reply.childElementCount, 1);
-  for (const text of [data.answer, ...data.follow_up_questions, data.notice]) {
+  for (const text of [data.answer, data.notice]) {
     assert.equal(app.$(".answer-card").textContent.includes(text), true);
   }
+  const panel = app.$("#follow-up-panel");
+  assert.equal(panel.hidden, false);
+  assert.ok(panel.textContent.includes(data.follow_up_questions[0]));
+  assert.equal(panel.querySelectorAll(".follow-up-option").length, 0);
+  assert.equal(app.$("#ask-results").textContent.includes(data.follow_up_questions[0]), false);
   assert.equal(reply.querySelectorAll(".citation").length, 0);
+  app.send("没有设置非机动车道。");
+  assert.deepEqual(app.asks()[1].body, { question: "没有设置非机动车道。", chat_state: data.chat_state });
+});
+
+test("only user-confirmed facts from temporary choices reach the next request", async () => {
+  const app = await setup();
+  const group = { question: "骑行的是什么车辆？", options: ["我骑的是电动自行车。", "我骑的是电动摩托车。"] };
+  const other = { question: "有没有发生碰撞？", options: ["现场发生了碰撞。", "现场没有发生碰撞。"] };
+  const first = answer("骑车穿行会怎么处理？");
+  first.follow_up_questions = [group.question, other.question];
+  first.follow_up_choices = [group, other];
+  app.send("骑车穿行会怎么处理？");
+  await app.respond(app.asks()[0], first);
+
+  const panel = app.$("#follow-up-panel");
+  const history = app.$("#ask-results");
+  const input = app.$("#ask-question");
+  const pick = (value) => {
+    const button = panel.querySelectorAll(".follow-up-option").find((node) => node.textContent === value);
+    assert.ok(button, `missing option ${value}`);
+    assert.equal(button.type, "button");
+    button.click();
+  };
+  assert.equal(panel.hidden, false);
+  assert.ok(app.$(".chat-composer").contains(panel));
+  assert.equal(history.contains(panel), false);
+  assert.deepEqual(panel.querySelectorAll(".follow-up-question").map((el) => el.textContent), [group.question, other.question]);
+  for (const { question, options } of first.follow_up_choices) {
+    for (const text of [question, ...options]) assert.equal(history.textContent.includes(text), false);
+  }
+  assert.equal(input.value, "");
+  const draft = "地点在武汉。";
+  input.value = draft;
+  input.dispatch("input");
+  const callsBeforeSelection = app.calls.length;
+  pick(group.options[1]);
+  assert.ok(input.value.includes(draft));
+  assert.ok(input.value.includes(group.options[1]));
+  input.value = "当天下雨。\n" + input.value;
+  input.dispatch("input");
+  pick(group.options[0]);
+  pick(group.options[0]);
+  pick(other.options[1]);
+  assert.ok(input.value.includes("当天下雨。\n" + draft));
+  assert.equal(input.value.split(group.options[0]).length - 1, 1);
+  assert.ok(input.value.includes(other.options[1]));
+  assert.equal(input.value.includes(group.options[1]), false);
+  assert.equal(input.value.includes(other.options[0]), false);
+  assert.equal(app.calls.length, callsBeforeSelection);
+  assert.equal(history.textContent.includes(group.options[0]), false);
+
+  const confirmed = input.value.replace(other.options[1], "经现场核实，未发生碰撞。");
+  input.value = confirmed;
+  input.dispatch("input");
+  app.$("#ask-form").requestSubmit();
+  assert.equal(app.asks().length, 2);
+  assert.deepEqual(app.asks()[1].body, { question: confirmed, chat_state: first.chat_state });
+  assert.equal(panel.querySelectorAll(".follow-up-option").length, 0);
+  const second = answer(confirmed, { messages: first.chat_state.messages, suffix: "二" });
+  second.follow_up_questions = [];
+  await app.respond(app.asks()[1], second);
+  assert.equal(panel.hidden, true);
+  assert.ok(history.textContent.includes(confirmed));
+  for (const unconfirmed of [group.options[1], other.options[0], other.options[1]]) {
+    assert.equal(history.textContent.includes(unconfirmed), false);
+  }
 });
 
 test("welcome examples fill the shared composer and remain usable after clearing chat", async () => {
@@ -234,9 +306,14 @@ test("welcome examples fill the shared composer and remain usable after clearing
   assert.equal(app.$("#ask-question").value, example.dataset.example);
   app.$("#ask-form").requestSubmit();
   assert.equal(app.$("#chat-welcome"), null);
-  await app.respond(app.asks()[0], answer(example.dataset.example));
+  const first = answer(example.dataset.example);
+  first.follow_up_choices = [{ question: first.follow_up_questions[0], options: ["已取得许可。", "尚未取得许可。"] }];
+  await app.respond(app.asks()[0], first);
+  assert.equal(app.$("#follow-up-panel").querySelectorAll(".follow-up-option").length, 2);
   app.$("#clear-chat").click();
   assert.ok(app.$("#chat-welcome"));
+  assert.equal(app.$("#follow-up-panel").hidden, true);
+  assert.equal(app.$("#follow-up-panel").textContent, "");
   app.$("[data-example]").click();
   assert.equal(app.$("#ask-question").value, example.dataset.example);
   assert.equal(app.document.activeElement, app.$("#ask-question"));
@@ -246,18 +323,31 @@ test("failed and cancelled retries retain successful state without duplicate car
   const app = await setup();
   app.send("原有情况");
   const first = answer("原有情况");
+  first.follow_up_choices = [{ question: first.follow_up_questions[0], options: ["旧选项甲", "旧选项乙"] }];
   await app.respond(app.asks()[0], first);
+  const panel = app.$("#follow-up-panel");
+  assert.ok(panel.textContent.includes("旧选项甲"));
   app.send("补充情况");
   await app.fail(app.asks()[1]);
+  assert.equal(panel.hidden, true);
+  assert.equal(panel.querySelectorAll(".follow-up-option").length, 0);
+  assert.equal(app.$("#ask-question").value, "补充情况");
   app.$(".error-panel button").click();
   assert.deepEqual(app.asks()[2].body.chat_state, first.chat_state);
   assert.equal(app.document.querySelectorAll(".chat-turn").length, 2);
   app.$(".loading-state button").click();
-  await app.respond(app.asks()[2], answer("不应写入的响应"));
+  const cancelled = answer("不应写入的响应");
+  cancelled.follow_up_choices = [{ question: cancelled.follow_up_questions[0], options: ["迟到选项甲", "迟到选项乙"] }];
+  await app.respond(app.asks()[2], cancelled);
   assert.ok(app.$(".cancelled-message"));
+  assert.equal(panel.hidden, true);
+  assert.equal(panel.querySelectorAll(".follow-up-option").length, 0);
   app.$(".cancelled-message button").click();
   assert.deepEqual(app.asks()[3].body, { question: "补充情况", chat_state: first.chat_state });
-  await app.respond(app.asks()[3], answer("补充情况", { messages: first.chat_state.messages }));
+  const retried = answer("补充情况", { messages: first.chat_state.messages });
+  retried.follow_up_choices = [{ question: retried.follow_up_questions[0], options: ["确认的新选项甲", "确认的新选项乙"] }];
+  await app.respond(app.asks()[3], retried);
+  assert.deepEqual(panel.querySelectorAll(".follow-up-option").map((option) => option.textContent), retried.follow_up_choices[0].options);
   assert.equal(app.document.querySelectorAll(".chat-turn").length, 2);
   assert.equal(app.document.querySelectorAll(".answer-card").length, 2);
 });
@@ -274,7 +364,11 @@ test("clear during generation isolates stale responses and finally from a new ch
   app.send("新问题");
   const current = app.asks()[1];
   assert.deepEqual(current.body.chat_state, { summary: "", messages: [] });
-  await app.respond(old, answer("旧问题"));
+  const stale = answer("旧问题");
+  stale.follow_up_choices = [{ question: stale.follow_up_questions[0], options: ["上一场事故属实", "上一场事故待查"] }];
+  await app.respond(old, stale);
+  assert.equal(app.$("#follow-up-panel").querySelectorAll(".follow-up-option").length, 0);
+  assert.equal(app.$("#follow-up-panel").hidden, true);
   assert.equal(app.$("#send-question").disabled, true);
   assert.equal(app.$("#ask-results").attributes["aria-busy"], "true");
   assert.equal(app.$("#ask-results").textContent.includes("旧问题"), false);
@@ -330,8 +424,10 @@ test("missing response context is retryable and a changed question replaces the 
   delete invalid.chat_state;
   await app.respond(app.asks()[0], invalid);
   assert.ok(app.$(".error-panel"));
-  app.send("改过的问题");
+  app.$("#ask-question").value = "改过的问题";
+  app.$("#ask-question").dispatch("input");
+  app.$(".error-panel button").click();
   assert.equal(app.document.querySelectorAll(".chat-turn").length, 1);
-  assert.deepEqual(app.asks()[1].body.chat_state, { summary: "", messages: [] });
+  assert.deepEqual(app.asks()[1].body, { question: "改过的问题", chat_state: { summary: "", messages: [] } });
   assert.equal(app.$("#ask-results").textContent.includes("旧问题"), false);
 });

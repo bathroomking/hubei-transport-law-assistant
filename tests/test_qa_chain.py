@@ -143,6 +143,10 @@ def test_insufficient_evidence_keeps_retrieved_documents_and_usage(
     assert result.model == llm.completion.model
     assert result.usage == llm.completion.usage
     assert result.follow_up_questions == ["请补充相关条文。"]
+    assert [choice.model_dump() for choice in result.follow_up_choices] == [
+        {"question": "请补充相关条文。", "options": []}
+    ]
+    assert result.chat_state.messages[-1].content == result.answer
     assert result.applicability_status == "not_verified"
 
 
@@ -159,6 +163,28 @@ def test_no_hits_skips_llm_and_returns_empty_source_documents(online_settings):
     assert result.claims == result.sources == result.source_documents == []
     assert result.model is None
     assert result.usage is None
+
+
+@pytest.mark.parametrize("options", [["是", "否"], ["甲", "乙", "丙", "丁"], None])
+def test_invalid_optional_controls_preserve_supported_claims(
+    ranked_documents, online_settings, options
+):
+    payload = answered_payload(ranked_documents[0].id)
+    payload.pop("follow_up_questions")
+    payload["follow_up_choices"] = [
+        {"options": ["问题本身缺失。"]},
+        {"question": "你骑的是电动自行车吗？", "options": options},
+        {"question": "事发地点在哪里？", "options": []},
+        {"question": "还有什么事情？", "options": []},
+    ]
+    result = asyncio.run(
+        LawService(RankedRetriever(ranked_documents), FakeLLM(payload), online_settings).ask(
+            SearchRequest(question="穿行会如何处理？")
+        )
+    )
+    assert result.follow_up_choices[0].options == []
+    assert result.follow_up_questions == ["你骑的是电动自行车吗？", "事发地点在哪里？"]
+    assert result.claims[0].citation_ids == [ranked_documents[0].id]
 
 
 @pytest.mark.parametrize("existing_but_not_retrieved", [True, False])

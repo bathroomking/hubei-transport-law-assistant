@@ -5,6 +5,7 @@
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const form = $("#ask-form");
   const input = $("#ask-question");
+  const followUpPanel = $("#follow-up-panel");
   const results = $("#ask-results");
   const welcome = $("#chat-welcome");
   const dialog = $("#detail-dialog");
@@ -13,6 +14,8 @@
   let chatState = { summary: "", messages: [] };
   let chatGeneration = 0;
   let pendingTurn;
+  const selectedFacts = new Map();
+  let previousDraft = "";
   let healthLoading = false;
   let activeView = "ask";
 
@@ -168,19 +171,101 @@
       }
       card.append(paragraph);
     }
-    if (data.follow_up_questions?.length) {
-      const followUp = el("div", "answer-follow-up");
-      const list = el("ol");
-      data.follow_up_questions.forEach((question) => list.append(el("li", "", question)));
-      followUp.append(el("p", "", "为了进一步判断，还想请你补充："), list);
-      card.append(followUp);
-    }
     if (data.notice) card.append(el("p", "answer-notice", data.notice));
     if (data.context_compacted) card.append(el("p", "context-note", "已整理较早的对话，可继续补充情况。"));
     target.replaceChildren(card);
   }
 
+  function clearFollowUps() {
+    selectedFacts.clear();
+    followUpPanel.replaceChildren();
+    followUpPanel.hidden = true;
+  }
+
+  // Only the text inserted for a question belongs to that choice. Keep its range
+  // in step with typing, so switching choices preserves the surrounding draft.
+  function trackDraftEdits() {
+    const draft = input.value;
+    if (selectedFacts.size && draft !== previousDraft) {
+      let start = 0, oldEnd = previousDraft.length, newEnd = draft.length;
+      while (start < oldEnd && start < newEnd && previousDraft[start] === draft[start]) start++;
+      while (oldEnd > start && newEnd > start && previousDraft[oldEnd - 1] === draft[newEnd - 1]) {
+        oldEnd--;
+        newEnd--;
+      }
+      const shift = newEnd - oldEnd;
+      for (const [group, fact] of selectedFacts) {
+        if (oldEnd <= fact.start) {
+          fact.start += shift;
+          fact.end += shift;
+        } else if (start < fact.end) {
+          if (start <= fact.start && oldEnd >= fact.end) {
+            selectedFacts.delete(group);
+          } else {
+            if (start < fact.start) fact.start = newEnd;
+            fact.end = oldEnd > fact.end ? start : fact.end + shift;
+          }
+        }
+      }
+    }
+    previousDraft = draft;
+    for (const group of $$(".follow-up-group", followUpPanel)) {
+      const fact = selectedFacts.get(group);
+      const text = fact && draft.slice(fact.start, fact.end);
+      for (const control of $$("button", group)) {
+        control.setAttribute("aria-pressed", String(control.textContent === text));
+      }
+    }
+  }
+
+  function chooseFact(group, option) {
+    if (questionController || !followUpPanel.contains(group)) return;
+    trackDraftEdits();
+    const draft = input.value;
+    const fact = selectedFacts.get(group);
+    const prefix = fact ? draft.slice(0, fact.start) : draft + (draft && !draft.endsWith("\n") ? "\n" : "");
+    const next = prefix + option + (fact ? draft.slice(fact.end) : "");
+    if (next.length > input.maxLength) {
+      input.setCustomValidity("加入此选项会超过 2000 字，请先缩短输入内容。");
+      input.reportValidity();
+      input.setCustomValidity("");
+      return;
+    }
+    input.value = next;
+    trackDraftEdits();
+    selectedFacts.set(group, { start: prefix.length, end: prefix.length + option.length });
+    updateInput();
+    input.focus();
+    input.setSelectionRange(prefix.length + option.length, prefix.length + option.length);
+  }
+
+  function renderFollowUps(data) {
+    clearFollowUps();
+    const groups = new Map();
+    for (const { question, options } of data.follow_up_choices || []) {
+      groups.set(question, options || []);
+    }
+    for (const question of data.follow_up_questions || []) {
+      if (!groups.has(question)) groups.set(question, []);
+    }
+    if (!groups.size) return;
+    followUpPanel.append(el("h2", "follow-up-title", "补充情况"));
+    for (const [question, options] of groups) {
+      const group = el("fieldset", "follow-up-group");
+      group.append(el("legend", "follow-up-question", question));
+      for (const option of options) {
+        const control = button(option, "follow-up-option", () => chooseFact(group, option));
+        control.setAttribute("aria-pressed", "false");
+        group.append(control);
+      }
+      followUpPanel.append(group);
+    }
+    followUpPanel.hidden = false;
+    followUpPanel.scrollTop = 0;
+  }
+
   function updateInput() {
+    trackDraftEdits();
     input.setCustomValidity("");
     $("#ask-count").textContent = `${input.value.length} / 2000`;
     input.style.height = "auto";
@@ -219,6 +304,7 @@
     $("#dialog-content").setAttribute("aria-busy", "false");
     chatState = { summary: "", messages: [] };
     pendingTurn = undefined;
+    clearFollowUps();
     results.replaceChildren(welcome);
     results.scrollTop = 0;
     input.value = "";
@@ -253,11 +339,9 @@
     questionController = controller;
     const isCurrent = () => generation === chatGeneration && questionController === controller;
     const retry = () => {
-      if (generation !== chatGeneration || questionController) return;
-      input.value = question;
-      updateInput();
-      submitQuestion(question);
+      if (generation === chatGeneration && pendingTurn === turn && !questionController) form.requestSubmit();
     };
+    clearFollowUps();
     setBusy(true);
     renderLoading(turn.response, "正在查找依据并在线回答…", () => controller.abort());
     turn.container.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -271,6 +355,7 @@
         throw new Error("服务未返回完整的聊天内容，请重试。");
       }
       renderAnswer(turn.response, data);
+      renderFollowUps(data);
       chatState = data.chat_state;
       pendingTurn = undefined;
       input.value = "";

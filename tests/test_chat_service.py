@@ -282,11 +282,13 @@ def test_ambiguous_followup_only_asks_for_clarification_and_keeps_usage(online_s
         result = post_ok(client, "这个呢？", history())
     assert result["status"] == "insufficient_evidence"
     assert result["follow_up_questions"] == [clarification]
+    assert result["follow_up_choices"] == [{"question": clarification, "options": []}]
     assert result["claims"] == result["sources"] == result["source_documents"] == []
     assert result["usage"] == usage.model_dump()
     assert len(llm.calls) == 1
     assert retriever.calls == []
-    assert clarification in result["chat_state"]["messages"][-1]["content"]
+    assert result["chat_state"]["messages"][-1]["content"] == result["answer"]
+    assert clarification not in result["answer"]
 
 
 def test_no_hits_keeps_rewrite_usage_and_successful_turn(online_settings):
@@ -296,6 +298,7 @@ def test_no_hits_keeps_rewrite_usage_and_successful_turn(online_settings):
     with TestClient(create_app(online_settings, llm, retriever=retriever)) as client:
         result = post_ok(client, "还有呢？", history())
     assert result["status"] == "insufficient_evidence"
+    assert result["follow_up_choices"] == result["follow_up_questions"] == []
     assert result["usage"] == usage.model_dump()
     assert len(result["chat_state"]["messages"]) == 4
     assert len(llm.calls) == 1
@@ -355,9 +358,16 @@ def test_single_oversized_source_returns_explicit_error_without_answer_call(
 
 def test_compaction_rewrite_answer_usage_and_context_roundtrip(online_settings, repository):
     document = repository.searchable[0]
+    old_question = "这条旧补问不应进入摘要。"
+    user_text = "用户称面积20，后纠正为18。" * 20 + "\n待补充：\n这是用户自己写的备注。"
     state = {
         "summary": "",
-        "messages": history(question="用户称面积20，后纠正为18。" * 20)["messages"] * 6,
+        "messages": history(
+            question=user_text,
+            answer="此前引用的原文解释。\n待补充：\n" + old_question,
+            citation=document.id,
+        )["messages"]
+        * 6,
     }
     original = copy.deepcopy(state)
     usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
@@ -378,10 +388,52 @@ def test_compaction_rewrite_answer_usage_and_context_roundtrip(online_settings, 
     assert state == original
     assert result["context_compacted"] is True
     assert result["chat_state"]["summary"] == summary
+    summary_input = json.loads(llm.calls[0][1]["content"])
+    assert summary_input["messages"][0]["content"] == user_text
+    assert summary_input["messages"][1] == {
+        "role": "assistant",
+        "content": "此前引用的原文解释。",
+        "citation_ids": [document.id],
+    }
+    assert all(old_question not in call[1]["content"] for call in llm.calls)
+    assert old_question not in json.dumps(result["chat_state"], ensure_ascii=False)
     assert len(result["chat_state"]["messages"]) == 4
     assert result["usage"] == {"prompt_tokens": 30, "completion_tokens": 15, "total_tokens": 45}
     assert qa_inputs(llm.calls[-1])[2]["summary"] == summary
     assert not configured.knowledge_path.exists()  # 会话从未写入知识库或另建文件。
+
+
+def test_only_the_chosen_fact_enters_the_next_question_and_history(online_settings, repository):
+    document = repository.searchable[0]
+    group = {
+        "question": "车辆的登记类型是什么？",
+        "options": ["我骑的是电动自行车。", "我骑的是电动摩托车。"],
+    }
+    confirmed, unused = group["options"]
+    llm = ScriptedLLM(
+        {
+            "claims": [{"text": "可先核对车辆的登记类型。", "citation_ids": [document.id]}],
+            "follow_up_choices": [group],
+        },
+        {"query": "电动自行车在机动车之间穿行怎么处理？", "clarification": ""},
+        answered(document.id),
+    )
+    with TestClient(
+        create_app(online_settings, llm, retriever=RecordingRetriever([document]))
+    ) as client:
+        first = post_ok(client, "穿行怎么判罚？")
+        second = post_ok(client, confirmed, first["chat_state"])
+    assert first["follow_up_choices"] == [group]
+    assert first["follow_up_questions"] == [group["question"]]
+    assert first["chat_state"] == history("穿行怎么判罚？", first["answer"], document.id)
+    for pending in [group["question"], *group["options"]]:
+        assert pending not in json.dumps(first["chat_state"], ensure_ascii=False)
+    assert second["chat_state"]["messages"][-2]["content"] == confirmed
+    assert second["follow_up_choices"] == second["follow_up_questions"] == []
+    for call in llm.calls[1:]:
+        # 本轮 question 是用户亲自确认的陈述，摘要改写和回答的 user 载荷均不含未选项。
+        assert confirmed in call[1]["content"]
+        assert group["question"] not in call[1]["content"] and unused not in call[1]["content"]
 
 
 def test_one_character_reply_is_a_valid_question(online_settings, repository):

@@ -157,6 +157,7 @@ class GeneratedAnswer(Model):
 
     status: Literal["answered", "insufficient_evidence"] = "answered"
     claims: list[Claim] = Field(max_length=8)
+    response_focus: Literal["resolved", "needs_fact", "practical"] | None = None
     practical_notes: list[Text] = Field(default_factory=list, max_length=2)
     follow_up_questions: list[Text] = Field(default_factory=list, max_length=3)
 

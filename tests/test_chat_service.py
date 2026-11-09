@@ -450,6 +450,47 @@ def test_one_character_reply_is_a_valid_question(online_settings, repository):
     assert result["chat_state"]["messages"][-2]["content"] == "是"
 
 
+@pytest.mark.parametrize(
+    ("focus", "notes", "questions"),
+    [
+        ("resolved", [], []),
+        ("needs_fact", [], ["哪项事实还不清楚？"]),
+        ("practical", ["可对照现场记录。"], []),
+    ],
+)
+def test_factual_update_keeps_quotes_and_assembles_only_needed_supplements(
+    online_settings, repository, focus, notes, questions
+):
+    doc = repository.searchable[0]
+    user_statement = "车有脚踏，我说它是合格的。"
+    old_guess = "助手擅自将它归类为另一车辆类别。"
+    previous = history(question=user_statement, answer=old_guess, citation=doc.id)
+    previous["summary"] = "用户先前咨询这一行为在湖北如何处理。"
+    current = "我骑的是电动自行车。"
+    llm = ScriptedLLM(
+        {"query": "先前待解的处理问题", "clarification": "", "case_user_turns": [1]},
+        {
+            **answered(doc.id),
+            "response_focus": focus,
+            "practical_notes": ["可对照现场记录。"],
+            "follow_up_questions": ["哪项事实还不清楚？"],
+        },
+    )
+    retriever = RecordingRetriever([doc])
+    with TestClient(create_app(online_settings, llm, retriever=retriever)) as client:
+        result = post_ok(client, current, previous)
+    qa = llm.calls[-1][1]["content"]
+    assert previous["summary"] in qa
+    assert old_guess not in qa
+    assert user_statement in qa and current in qa and doc.text in qa
+    assert result["practical_notes"] == notes
+    assert result["follow_up_questions"] == questions
+    assert result["chat_state"]["messages"][:2] == previous["messages"]
+    assert result["chat_state"]["messages"][-1]["content"] == result["answer"]
+    assert result["claims"][0]["citation_ids"] == [doc.id]
+    assert "response_focus" not in result
+
+
 def test_budget_excluded_source_cannot_be_cited(online_settings, repository):
     first, second = repository.searchable[:2]
     second = second.model_copy(update={"text": "不能截断的低排名原文" * 5000})

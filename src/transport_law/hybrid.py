@@ -22,13 +22,17 @@ def _search_terms(question: str) -> str:
     cycling = any(word in subject for word in ("非机动车", "自行车", "单车")) or (
         "骑" in subject and any(word in subject for word in ("电动车", "电瓶车"))
     )
-    if (
-        cycling
-        and any(word in q for word in ("车道", "穿行", "借道"))
-        and any(word in q for word in ("罚", "怎么处理", "如何处理", "怎么判", "裁量"))
+    if not cycling:
+        return question
+    query = question
+    if "斜穿" in q or "横穿" in q:
+        # 同时检索横过道路的规则；行驶方向本身不足以确定横过或在车辆之间穿行。
+        query += " 横过机动车道 下车推行"
+    if any(word in q for word in ("车道", "穿行", "借道")) and any(
+        word in q for word in ("罚", "怎么处理", "如何处理", "怎么判", "裁量")
     ):
-        return question + " 非机动车驾驶人 道路通行规定 警告 罚款"
-    return question
+        query += " 非机动车驾驶人 道路通行规定 警告 罚款"
+    return query
 
 
 def reciprocal_rank_fusion(

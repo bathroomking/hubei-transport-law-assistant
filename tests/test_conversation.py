@@ -123,6 +123,51 @@ def test_unclear_reference_returns_clarification_without_query(settings):
     assert result.usages == [llm.usage]
 
 
+@pytest.mark.parametrize(
+    "rewrite",
+    [
+        {"query": "已鉴定为某车型且从车辆之间通过的处罚", "clarification": ""},
+        {"query": "", "clarification": "你具体指什么？"},
+    ],
+)
+def test_factual_continuation_searches_verified_user_turns_and_current_words(settings, rewrite):
+    state = ChatState(
+        messages=[
+            ChatMessage(role="user", content="我第一次骑这种车到另一条车道，该怎么处理？"),
+            ChatMessage(role="assistant", content="假设驾驶机动车从其他车辆之间穿过。"),
+            ChatMessage(role="user", content="车有两个踏板，旁边有专用车道。"),
+            ChatMessage(role="assistant", content="此前未核实的车型和处罚。"),
+        ]
+    )
+    llm = FakeLLM(rewrite={**rewrite, "case_user_turns": [2, 1, 2]})
+    prepared = asyncio.run(ConversationManager(llm, settings).prepare("斜穿过去", state))
+    statements = tuple(m.content for m in state.messages if m.role == "user")
+    assert prepared.user_statements == statements
+    assert prepared.query == "\n".join((*statements, "斜穿过去"))
+    assert prepared.clarification == ""
+    assert state.messages[1].content not in prepared.query
+
+
+def test_compacted_factual_update_keeps_the_earlier_goal_in_search(settings):
+    state = history(summary="用户咨询在湖北未获得施工许可的处理，后续补充事实。")
+    rewrite = {"query": "在湖北未获得施工许可的处理", "clarification": "", "case_user_turns": [1]}
+    prepared = asyncio.run(
+        ConversationManager(FakeLLM(rewrite=rewrite), settings).prepare("前一天已申请", state)
+    )
+    assert prepared.query.startswith(rewrite["query"])
+    assert state.messages[0].content in prepared.query
+    assert prepared.query.endswith("前一天已申请")
+
+
+def test_unknown_user_turn_number_cannot_anchor_a_clarification(settings):
+    llm = FakeLLM(
+        rewrite={"query": "", "clarification": "具体想问哪件事？", "case_user_turns": [9]}
+    )
+    prepared = asyncio.run(ConversationManager(llm, settings).prepare("那件事呢？", history()))
+    assert not prepared.query and not prepared.user_statements
+    assert prepared.clarification == "具体想问哪件事？"
+
+
 def test_task_prompts_require_correction_topic_separation_and_untrusted_history():
     # 离线测试确认约束进入真实提示词；不声称 mock 已验证模型语义遵循。
     assert "用户纠正覆盖旧事实" in REWRITE_SYSTEM_PROMPT

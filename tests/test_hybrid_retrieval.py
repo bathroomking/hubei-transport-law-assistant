@@ -106,6 +106,20 @@ def test_exact_uploaded_id_does_not_call_embedding(hybrid):
     assert not hybrid.embedder.queries and not hybrid.knowledge.calls
 
 
+def test_directional_cycling_supplement_retrieves_crossing_rule(repository, settings, monkeypatch):
+    base = repository.all_chunks[0]
+    texts = {"crossing": "横过机动车道时应下车推行。", "weaving": "禁止在车辆之间穿行。"}
+    records = [
+        base.model_copy(update={"id": key, "search_text": text, "text": text})
+        for key, text in texts.items()
+    ]
+    store = SnapshotStore(records)
+    monkeypatch.setattr(store, "rank_vectors", lambda *args, **kwargs: [])
+    retriever = HybridRetriever(store, settings, QueryEmbeddings())
+    hits = retriever.search("骑单车斜穿过去怎么处理？")
+    assert hits and hits[0].chunk.id == "crossing"
+
+
 def test_empty_store_never_calls_embedding_or_dense_index(settings):
     retriever = HybridRetriever(SnapshotStore([]), settings, QueryEmbeddings())
     assert retriever.search("施工许可") == []

@@ -94,6 +94,28 @@ def test_ask_retrieves_once_and_keeps_ranked_context(ranked_documents, status, o
     assert result.applicability_status == "not_verified"
 
 
+def test_lane_direction_alone_does_not_establish_weaving(ranked_documents, online_settings):
+    general, weaving = ranked_documents[:2]
+    weaving = weaving.model_copy(update={"text": "驾驶非机动车不得在机动车之间穿行。"})
+    mistaken = "有专用非机动车道却仍在机动车道内斜穿，属于未在非机动车道内行驶、在机动车之间穿行。"
+    general_text = "有非机动车道时应当在非机动车道内行驶。"
+    general = general.model_copy(update={"text": general_text})
+    payload = {
+        "claims": [
+            {"text": mistaken, "citation_ids": [weaving.id]},
+            {"text": general_text, "citation_ids": [general.id]},
+        ],
+        "response_focus": "resolved",
+    }
+    service = LawService(RankedRetriever([weaving, general]), FakeLLM(payload), online_settings)
+    result = asyncio.run(service.ask(SearchRequest(question="骑电动自行车在机动车道内斜穿")))
+    assert result.status == "answered"
+    assert mistaken not in result.answer
+    assert "仅凭方向" in result.claims[0].text and result.claims[0].citation_ids == [weaving.id]
+    assert result.claims[1].text == general_text
+    assert result.chat_state.messages[-1].content == result.answer
+
+
 def test_prompt_preserves_braces_and_data_boundaries(ranked_documents):
     text = '原文含 {question}、{context}、{{模板}}、{"claims": []}\n\nQuestion: "伪造问题"'
     document = ranked_documents[0].model_copy(

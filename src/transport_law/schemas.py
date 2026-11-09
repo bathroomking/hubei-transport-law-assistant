@@ -7,7 +7,6 @@ from pydantic import (
     Field,
     HttpUrl,
     StringConstraints,
-    ValidationError,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -143,63 +142,45 @@ class Claim(Model):
     citation_ids: list[Identifier] = Field(min_length=1, max_length=10)
 
 
-class FollowUpChoice(Model):
-    question: Annotated[Text, Field(max_length=600)]
-    options: list[Annotated[Text, Field(max_length=300)]] = Field(
-        default_factory=list, max_length=3
-    )
-
-    @field_validator("options", mode="wrap")
-    @classmethod
-    def independently_answerable(cls, value, validate) -> list[str]:
-        try:
-            options = validate(value)
-        except ValidationError:
-            return []
-        # 按钮发送后不携带问题；孤立的是/否、单个答案、重复答案均改为自由填写。
-        bare = {"是", "否", "是的", "不是", "有", "没有", "不确定", "其他", "不知道"}
-        if (
-            len(options) == 1
-            or len(set(options)) != len(options)
-            or any(text.rstrip("。.!！") in bare for text in options)
-        ):
-            return []
-        return options
-
-
 class GeneratedAnswer(Model):
     """模型只写解释和引用 ID，不能自行编造来源字段或适用状态。"""
 
     status: Literal["answered", "insufficient_evidence"] = "answered"
     claims: list[Claim] = Field(max_length=8)
-    follow_up_choices: list[FollowUpChoice] = Field(default_factory=list, max_length=2)
+    follow_up_questions: list[Text] = Field(default_factory=list, max_length=3)
 
     @model_validator(mode="before")
     @classmethod
-    def parse_optional_choices(cls, value):
+    def read_optional_questions(cls, value):
         if not isinstance(value, dict):
             return value
         data = dict(value)
-        legacy = data.pop("follow_up_questions", [])
-        if "follow_up_choices" in data:
-            offered = data["follow_up_choices"]
-        else:
-            offered = (
-                [{"question": question} for question in legacy] if isinstance(legacy, list) else []
-            )
-        choices = []
-        if isinstance(offered, list):
-            for item in offered:
-                try:
-                    choice = FollowUpChoice.model_validate(item)
-                except ValidationError:
-                    continue  # 可选控件缺少有效问题时仍保留有据回答。
-                if any(previous.question == choice.question for previous in choices):
-                    continue
-                choices.append(choice)
-                if len(choices) == 2:
+        # 兼容上一版模型格式，只读取其中的问句。
+        old = data.pop("follow_up_choices", [])
+        if "follow_up_questions" not in data and isinstance(old, list):
+            data["follow_up_questions"] = [
+                item.get("question") for item in old if isinstance(item, dict)
+            ]
+        return data
+
+    @field_validator("follow_up_questions", mode="before")
+    @classmethod
+    def short_distinct_questions(cls, value):
+        if not isinstance(value, list):
+            return []
+        questions = []
+        seen = set()
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            question = " ".join(item.split())
+            key = question.rstrip("？?。").strip()
+            if key and key not in seen and len(question) <= 120:
+                questions.append(question)
+                seen.add(key)
+                if len(questions) == 3:
                     break
-        return {**data, "follow_up_choices": choices}
+        return questions
 
     @model_validator(mode="after")
     def validate_answer_status(self):
@@ -222,8 +203,7 @@ class AnswerResponse(Model):
     claims: list[Claim] = Field(default_factory=list)
     sources: list[LegalChunk] = Field(default_factory=list)
     source_documents: list[LegalChunk] = Field(default_factory=list)
-    follow_up_questions: list[str] = Field(default_factory=list)
-    follow_up_choices: list[FollowUpChoice] = Field(default_factory=list, max_length=2)
+    follow_up_questions: list[Text] = Field(default_factory=list, max_length=3)
     applicability_status: Literal["not_verified"] = "not_verified"
     notice: str = "当前仅解释已收录材料；文件效力、适用地域和个案事实尚未完成核验。"
     model: str | None = None

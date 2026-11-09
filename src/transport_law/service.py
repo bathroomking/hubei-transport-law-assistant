@@ -14,7 +14,6 @@ from transport_law.schemas import (
     AnswerResponse,
     ChatMessage,
     ChatState,
-    FollowUpChoice,
     GeneratedAnswer,
     SearchRequest,
     Usage,
@@ -41,7 +40,7 @@ class LawService:
                 AnswerResponse(
                     status="insufficient_evidence",
                     answer="还需要确认你这次追问的具体意思。",
-                    follow_up_choices=[FollowUpChoice(question=prepared.clarification, options=[])],
+                    follow_up_questions=[prepared.clarification],
                 ),
             )
         # Chroma 检索包含同步 HTTP 请求，在工作线程执行，避免阻塞 FastAPI 事件循环。
@@ -100,7 +99,7 @@ class LawService:
                     status="insufficient_evidence",
                     answer=INSUFFICIENT_ANSWER,
                     source_documents=source_documents,
-                    follow_up_choices=generated.follow_up_choices,
+                    follow_up_questions=generated.follow_up_questions,
                     model=completion.model,
                 ),
             )
@@ -123,7 +122,7 @@ class LawService:
                 claims=generated.claims,
                 sources=[allowed[citation_id] for citation_id in cited_ids],
                 source_documents=source_documents,
-                follow_up_choices=generated.follow_up_choices,
+                follow_up_questions=generated.follow_up_questions,
                 model=completion.model,
             ),
         )
@@ -132,8 +131,7 @@ class LawService:
     def _finish(
         request: SearchRequest, prepared: PreparedConversation, answer: AnswerResponse
     ) -> AnswerResponse:
-        answer.follow_up_questions = [choice.question for choice in answer.follow_up_choices]
-        # 未选的事实只属于本轮控件。只有用户实际发送的文字才进入后续对话。
+        # 补问只显示在本轮。下一轮从用户实际输入的文字读取补充事实。
         answer.chat_state = ChatState(
             summary=prepared.state.summary,
             messages=[

@@ -54,12 +54,8 @@ body[data-view="ask"] main { display: flex; flex-direction: column; flex: 1; min
 .chat-composer:focus-within { border-top-color: #8daa96; }
 #follow-up-panel { max-height: min(24dvh, 200px); overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; margin-bottom: 10px; padding: 2px 4px 10px; border-bottom: 1px solid var(--line); scrollbar-width: thin; }
 .follow-up-title { color: var(--green); font-size: 13px; font-weight: 600; margin-bottom: 7px; }
-.follow-up-group { min-width: 0; border: 0; margin: 0; padding: 0; }
-.follow-up-group + .follow-up-group { margin-top: 9px; }
-.follow-up-question { max-width: 100%; padding: 0; font-size: 13px; line-height: 1.6; }
-.follow-up-option { max-width: 100%; margin: 5px 6px 2px 0; padding: 5px 10px; border: 1px solid #bfcdbd; border-radius: 8px; background: var(--paper); color: var(--green); text-align: start; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
-.follow-up-option:hover { border-color: var(--green); }
-.follow-up-option[aria-pressed="true"] { border-color: var(--green); color: white; background: var(--green); }
+.follow-up-questions { margin: 0; padding-inline-start: 1.5em; font-size: 13px; line-height: 1.65; }
+.follow-up-questions li + li { margin-top: 3px; }
 .question-card { padding: 0; }
 textarea { display: block; resize: none; min-height: 56px; max-height: 144px; width: 100%; border: 0; outline: none; padding: 0 0 8px; background: transparent; color: var(--ink); font-size: 16px; line-height: 1.7; border-radius: 4px; }
 textarea:focus-visible { outline: 0; }

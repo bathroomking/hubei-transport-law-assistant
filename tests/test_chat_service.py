@@ -282,7 +282,7 @@ def test_ambiguous_followup_only_asks_for_clarification_and_keeps_usage(online_s
         result = post_ok(client, "这个呢？", history())
     assert result["status"] == "insufficient_evidence"
     assert result["follow_up_questions"] == [clarification]
-    assert result["follow_up_choices"] == [{"question": clarification, "options": []}]
+    assert "follow_up_choices" not in result
     assert result["claims"] == result["sources"] == result["source_documents"] == []
     assert result["usage"] == usage.model_dump()
     assert len(llm.calls) == 1
@@ -298,7 +298,7 @@ def test_no_hits_keeps_rewrite_usage_and_successful_turn(online_settings):
     with TestClient(create_app(online_settings, llm, retriever=retriever)) as client:
         result = post_ok(client, "还有呢？", history())
     assert result["status"] == "insufficient_evidence"
-    assert result["follow_up_choices"] == result["follow_up_questions"] == []
+    assert result["follow_up_questions"] == []
     assert result["usage"] == usage.model_dump()
     assert len(result["chat_state"]["messages"]) == 4
     assert len(llm.calls) == 1
@@ -403,37 +403,34 @@ def test_compaction_rewrite_answer_usage_and_context_roundtrip(online_settings, 
     assert not configured.knowledge_path.exists()  # 会话从未写入知识库或另建文件。
 
 
-def test_only_the_chosen_fact_enters_the_next_question_and_history(online_settings, repository):
+def test_manually_supplied_facts_enter_next_turn_without_repeating_questions(
+    online_settings, repository
+):
     document = repository.searchable[0]
-    group = {
-        "question": "车辆的登记类型是什么？",
-        "options": ["我骑的是电动自行车。", "我骑的是电动摩托车。"],
-    }
-    confirmed, unused = group["options"]
+    questions = ["你骑的是什么类型的车？", "你当时是怎么通行的？"]
+    clarification = "我骑的是电动自行车，在两辆机动车之间穿过。"
     llm = ScriptedLLM(
         {
-            "claims": [{"text": "可先核对车辆的登记类型。", "citation_ids": [document.id]}],
-            "follow_up_choices": [group],
+            "claims": [{"text": "要按实际车辆和通行方式判断。", "citation_ids": [document.id]}],
+            "follow_up_questions": questions,
         },
-        {"query": "电动自行车在机动车之间穿行怎么处理？", "clarification": ""},
+        {"query": "骑电动自行车在机动车之间穿行怎么处理？", "clarification": ""},
         answered(document.id),
     )
     with TestClient(
         create_app(online_settings, llm, retriever=RecordingRetriever([document]))
     ) as client:
         first = post_ok(client, "穿行怎么判罚？")
-        second = post_ok(client, confirmed, first["chat_state"])
-    assert first["follow_up_choices"] == [group]
-    assert first["follow_up_questions"] == [group["question"]]
+        second = post_ok(client, clarification, first["chat_state"])
+    assert first["follow_up_questions"] == questions
+    assert "follow_up_choices" not in first
     assert first["chat_state"] == history("穿行怎么判罚？", first["answer"], document.id)
-    for pending in [group["question"], *group["options"]]:
-        assert pending not in json.dumps(first["chat_state"], ensure_ascii=False)
-    assert second["chat_state"]["messages"][-2]["content"] == confirmed
-    assert second["follow_up_choices"] == second["follow_up_questions"] == []
+    assert all(q not in first["answer"] for q in questions)
+    assert second["chat_state"]["messages"][-2]["content"] == clarification
+    assert second["follow_up_questions"] == []
     for call in llm.calls[1:]:
-        # 本轮 question 是用户亲自确认的陈述，摘要改写和回答的 user 载荷均不含未选项。
-        assert confirmed in call[1]["content"]
-        assert group["question"] not in call[1]["content"] and unused not in call[1]["content"]
+        assert clarification in call[1]["content"]
+        assert all(q not in call[1]["content"] for q in questions)
 
 
 def test_one_character_reply_is_a_valid_question(online_settings, repository):

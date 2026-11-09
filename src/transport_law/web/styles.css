@@ -53,8 +53,8 @@ body[data-view="ask"] main { display: flex; flex-direction: column; flex: 1; min
 .chat-composer { flex-shrink: 0; border-top: 1px solid var(--line); padding: 16px 28px 12px; background: #f9faf5; }
 .chat-composer:focus-within { border-top-color: #8daa96; }
 #follow-up-panel { margin-bottom: 6px; }
-.follow-up-strip { display: flex; gap: 6px; overflow-x: auto; overscroll-behavior-x: contain; padding: 3px; scrollbar-width: thin; }
-.follow-up-chip { flex: 0 0 auto; max-width: min(26em, 84%); min-height: 30px; padding: 4px 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.follow-up-strip { display: flex; flex-flow: row nowrap; align-items: center; gap: 6px; padding: 3px; }
+.follow-up-chip { flex: 0 1 auto; min-width: min(6em, 25%); max-width: min(26em, 100%); min-height: 30px; padding: 4px 12px; border-radius: 999px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .follow-up-chip:focus-visible { outline-offset: 0; }
 .follow-up-chip[aria-pressed="true"] { border-color: #88a78e; background: #e2ebdb; color: var(--green-dark); }
 .follow-up-detail { max-height: min(5.1em, 14dvh); margin: 2px 3px 0; overflow-y: auto; overflow-wrap: anywhere; font-size: 13px; line-height: 1.7; color: var(--ink); }
@@ -73,8 +73,8 @@ textarea::placeholder { color: #859087; }
 .secondary { border-color: var(--line); background: var(--paper); color: var(--green); }
 .secondary:hover:not(:disabled) { background: #edf3eb; border-color: #b5c8b5; }
 .examples { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; margin-top: 24px; }
-.examples button, .follow-up-chip { background: #f2f5ee; color: #516756; border: 1px solid #e3e9dc; border-radius: 8px; font-size: 12px; }
-.examples button { padding: 10px 13px; }
+.examples button, .follow-up-chip { background: #f2f5ee; color: #516756; border: 1px solid #e3e9dc; font-size: 12px; }
+.examples button { border-radius: 8px; padding: 10px 13px; }
 .examples button:hover:not(:disabled), .follow-up-chip:hover { background: #e4edde; }
 .input-hint { margin-top: 10px; color: var(--muted); font-size: 11px; line-height: 1.8; }
 .chat-toolbar { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 14px; padding: 17px 28px; border-bottom: 1px solid #e9ede5; }

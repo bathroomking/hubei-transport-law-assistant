@@ -117,3 +117,5 @@ python -m ruff format --check src tests
 前端改动可使用 Node.js 执行 `node --check src/transport_law/web/app.js`；运行服务本身不需要 Node.js。命令行入口仅保留 `serve` 和 `ask`，参数见 `python -m transport_law --help`。
 
 临时聊天交互回归：`node --test tests/test_web_chat.mjs`，无需安装前端依赖。
+
+使用带答案的交管 12123 Word 题库做端到端测评，见[题库转换、实测与评分说明](docs/exam-evaluation.md)。

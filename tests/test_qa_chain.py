@@ -124,6 +124,7 @@ def test_insufficient_evidence_keeps_retrieved_documents_and_usage(
         {
             "status": "insufficient_evidence",
             "claims": [],
+            "practical_notes": ["可以比对记录。"],
             "follow_up_questions": ["请补充相关条文。"],
         }
     )
@@ -138,6 +139,7 @@ def test_insufficient_evidence_keeps_retrieved_documents_and_usage(
     assert result.status == "insufficient_evidence"
     assert result.answer == INSUFFICIENT_ANSWER == "现有资料不足，无法回答这个问题。"
     assert result.claims == []
+    assert result.practical_notes == []
     assert result.sources == []
     assert result.source_documents == ranked_documents[:2]
     assert result.model == llm.completion.model
@@ -159,8 +161,44 @@ def test_no_hits_skips_llm_and_returns_empty_source_documents(online_settings):
     assert llm.calls == []
     assert result.status == "insufficient_evidence"
     assert result.claims == result.sources == result.source_documents == []
+    assert result.practical_notes == []
     assert result.model is None
     assert result.usage is None
+
+
+def test_uncited_supplement_cannot_publish_obvious_sanctions_or_fake_citations(
+    ranked_documents, online_settings
+):
+    document = ranked_documents[0]
+    observations = [
+        "可对照现场照片中的标线和行车轨迹。",
+        "可以查看此前的处罚记录来核实当事人的描述。",
+    ]
+    llm = FakeLLM(
+        answered_payload(document.id)
+        | {
+            "practical_notes": [
+                "按本地做法罚款五十元。",
+                "现场直接扣留车辆。",
+                "可据此判定全部责任。",
+                "必须在三日内提交。",
+                "未经核实的判断[1]。",
+                observations[0],
+                observations[0],
+                observations[1],
+                "多余的一句提示。",
+            ]
+        }
+    )
+    result = asyncio.run(
+        LawService(RankedRetriever(ranked_documents), llm, online_settings).ask(
+            SearchRequest(question="请结合现场说明处理依据。")
+        )
+    )
+    assert result.practical_notes == observations
+    assert result.answer == result.claims[0].text + "\n\n实务提示\n" + "\n".join(observations)
+    assert result.sources == [document]
+    assert result.chat_state.messages[-1].citation_ids == [document.id]
 
 
 @pytest.mark.parametrize(

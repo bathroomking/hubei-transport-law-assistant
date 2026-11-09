@@ -76,6 +76,29 @@ def test_one_ready_snapshot_and_one_query_embedding_per_search(hybrid):
     assert hybrid.embedder.queries == ["未知语义问题"]
 
 
+def test_lane_penalty_can_recall_general_rule_without_matching_lane_words(
+    repository, settings, monkeypatch
+):
+    base = repository.all_chunks[0]
+    records = [
+        base.model_copy(update={"id": ident, "text": text, "search_text": text})
+        for ident, text in [
+            ("lane", "非机动车应当在非机动车道内行驶。"),
+            ("general", "非机动车驾驶人违反道路通行规定的，处警告或罚款。另有规定的从其规定。"),
+        ]
+    ]
+    store, embedder = SnapshotStore(records), QueryEmbeddings()
+    monkeypatch.setattr(store, "rank_vectors", lambda *args, **kwargs: [])
+    retriever = HybridRetriever(store, settings, embedder)
+    assert {hit.chunk.id for hit in retriever.search("骑单车走机动车道怎么罚？")} == {
+        "general",
+        "lane",
+    }
+    motorist = "小汽车占用非机动车道怎么罚？"
+    retriever.search(motorist)
+    assert len(embedder.queries) == 2 and embedder.queries[-1] == motorist
+
+
 def test_exact_uploaded_id_does_not_call_embedding(hybrid):
     result = hybrid.search("UP-fixture-2", top_k=1)
     assert [h.chunk.id for h in result] == ["UP-fixture-2"]

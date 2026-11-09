@@ -1,3 +1,4 @@
+import re
 from datetime import date
 from typing import Annotated, Literal
 
@@ -14,6 +15,15 @@ from pydantic import (
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 Identifier = Annotated[str, StringConstraints(pattern=r"^[a-zA-Z0-9_.:-]+$", max_length=120)]
+
+# 实务提示没有引用。明显的处罚、强制措施、法定数值和引文应只进入带来源的 claims。
+_LEGAL_NOTE = re.compile(
+    r"罚(?!款?记录|决定书)|警告|拘留|禁驾|吊销|暂扣|扣留|扣押|没收|扣车|拖移|扣证|[记扣]分|"
+    r"追究.{0,4}责任|(?:全部|主要|次要|同等)责任|全责|主责|"
+    r"责令|强制|应当|必须|禁止|不得|有权|依法|法定|《|第[零〇一二三四五六七八九十百千\d]+条|"
+    r"[\[【]\s*\d+\s*[\]】]|https?://|"
+    r"[\d零〇一二三四五六七八九十百千万两]+\s*(?:元|块钱|分|日|天|个月|小时|年|%|％|公里/小时)"
+)
 
 
 class Model(BaseModel):
@@ -147,6 +157,7 @@ class GeneratedAnswer(Model):
 
     status: Literal["answered", "insufficient_evidence"] = "answered"
     claims: list[Claim] = Field(max_length=8)
+    practical_notes: list[Text] = Field(default_factory=list, max_length=2)
     follow_up_questions: list[Text] = Field(default_factory=list, max_length=3)
 
     @model_validator(mode="before")
@@ -162,6 +173,21 @@ class GeneratedAnswer(Model):
                 item.get("question") for item in old if isinstance(item, dict)
             ]
         return data
+
+    @field_validator("practical_notes", mode="before")
+    @classmethod
+    def short_practical_notes(cls, value):
+        notes = []
+        if isinstance(value, list):
+            for item in value:
+                if not isinstance(item, str):
+                    continue
+                text = " ".join(item.split())
+                if 0 < len(text) <= 240 and text not in notes and not _LEGAL_NOTE.search(text):
+                    notes.append(text)
+                    if len(notes) == 2:
+                        break
+        return notes
 
     @field_validator("follow_up_questions", mode="before")
     @classmethod
@@ -188,6 +214,8 @@ class GeneratedAnswer(Model):
             raise ValueError("有答案时必须提供带引用的陈述")
         if self.status == "insufficient_evidence" and self.claims:
             raise ValueError("资料不足时不得生成带引用的断言")
+        if self.status == "insufficient_evidence":
+            self.practical_notes = []
         return self
 
 
@@ -201,11 +229,12 @@ class AnswerResponse(Model):
     status: Literal["answered", "insufficient_evidence"]
     answer: str
     claims: list[Claim] = Field(default_factory=list)
+    practical_notes: list[Text] = Field(default_factory=list, max_length=2)
     sources: list[LegalChunk] = Field(default_factory=list)
     source_documents: list[LegalChunk] = Field(default_factory=list)
     follow_up_questions: list[Text] = Field(default_factory=list, max_length=3)
     applicability_status: Literal["not_verified"] = "not_verified"
-    notice: str = "当前仅解释已收录材料；文件效力、适用地域和个案事实尚未完成核验。"
+    notice: str = "法律结论可通过引用核对。文件效力、适用地域和个案事实仍需核验。"
     model: str | None = None
     usage: Usage | None = None
     chat_state: ChatState = Field(default_factory=ChatState)

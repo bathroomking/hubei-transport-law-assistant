@@ -112,14 +112,18 @@ class LawService:
         )
         if any(citation_id not in allowed for citation_id in cited_ids):
             raise AppError("invalid_citation", "模型引用了本次检索以外的条目，答案已拦截。")
+        answer_text = "\n\n".join(claim.text for claim in generated.claims)
+        if generated.practical_notes:
+            answer_text += "\n\n实务提示\n" + "\n".join(generated.practical_notes)
         # 原文和来源只来自库内记录，绝不使用模型生成的原文/页码/URL。
         return self._finish(
             request,
             prepared,
             AnswerResponse(
                 status="answered",
-                answer="\n\n".join(claim.text for claim in generated.claims),
+                answer=answer_text,
                 claims=generated.claims,
+                practical_notes=generated.practical_notes,
                 sources=[allowed[citation_id] for citation_id in cited_ids],
                 source_documents=source_documents,
                 follow_up_questions=generated.follow_up_questions,

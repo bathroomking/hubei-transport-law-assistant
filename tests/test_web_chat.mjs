@@ -229,6 +229,23 @@ test("sending reveals the newest turn inside the chat and a late answer leaves r
   assert.equal(app.document.viewportScrollTarget, undefined);
 });
 
+test("practical notes follow the cited claims without duplicating text or adding citation buttons", async () => {
+  const app = await setup();
+  app.send("需要核实什么？");
+  const data = answer("需要核实什么？");
+  data.practical_notes = ["核对车辆类型。", "记录现场标线。"];
+  data.answer += "\n实务提示\n" + data.practical_notes.join("\n");
+  await app.respond(app.asks()[0], data);
+  const card = app.$(".answer-card");
+  const notes = card.querySelector(".practical-notes");
+  assert.ok(card.children.indexOf(notes) > card.children.indexOf(card.querySelector(".answer-claim")));
+  assert.equal(notes.querySelector("h3").textContent, "实务提示");
+  assert.deepEqual(notes.querySelectorAll("li").map((item) => item.textContent), data.practical_notes);
+  assert.equal(notes.querySelector("button"), null);
+  assert.equal(card.textContent.split(data.practical_notes[0]).length, 2);
+  assert.equal(card.querySelectorAll(".citation").length, 1);
+});
+
 test("a free-form clarification accepts typed facts while its notice stays in the answer", async () => {
   const app = await setup();
   app.send("是的");

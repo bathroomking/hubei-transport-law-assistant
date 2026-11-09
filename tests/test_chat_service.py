@@ -409,9 +409,11 @@ def test_manually_supplied_facts_enter_next_turn_without_repeating_questions(
     document = repository.searchable[0]
     questions = ["你骑的是什么类型的车？", "你当时是怎么通行的？"]
     clarification = "我骑的是电动自行车，在两辆机动车之间穿过。"
+    note = "可将行驶轨迹与路面标线对照。"
     llm = ScriptedLLM(
         {
             "claims": [{"text": "要按实际车辆和通行方式判断。", "citation_ids": [document.id]}],
+            "practical_notes": [note],
             "follow_up_questions": questions,
         },
         {"query": "骑电动自行车在机动车之间穿行怎么处理？", "clarification": ""},
@@ -423,6 +425,9 @@ def test_manually_supplied_facts_enter_next_turn_without_repeating_questions(
         first = post_ok(client, "穿行怎么判罚？")
         second = post_ok(client, clarification, first["chat_state"])
     assert first["follow_up_questions"] == questions
+    assert first["practical_notes"] == [note]
+    assert first["answer"].endswith("实务提示\n" + note)
+    assert all(note not in claim["text"] for claim in first["claims"])
     assert "follow_up_choices" not in first
     assert first["chat_state"] == history("穿行怎么判罚？", first["answer"], document.id)
     assert all(q not in first["answer"] for q in questions)

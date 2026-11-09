@@ -169,6 +169,13 @@
       }
       card.append(paragraph);
     }
+    if (claims.length && data.practical_notes?.length) {
+      const section = el("section", "practical-notes");
+      const list = el("ul");
+      for (const note of data.practical_notes) list.append(el("li", "", note));
+      section.append(el("h3", "", "实务提示"), list);
+      card.append(section);
+    }
     if (data.notice) card.append(el("p", "answer-notice", data.notice));
     if (data.context_compacted) card.append(el("p", "context-note", "已整理较早的对话，可继续补充情况。"));
     target.replaceChildren(card);

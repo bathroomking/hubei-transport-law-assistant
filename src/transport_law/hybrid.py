@@ -7,11 +7,28 @@ from typing import TYPE_CHECKING
 from transport_law.config import Settings
 from transport_law.embeddings import DashScopeEmbeddings, Embeddings
 from transport_law.repository import ChunkRepository
-from transport_law.retrieval import BM25Retriever
+from transport_law.retrieval import BM25Retriever, normalize
 from transport_law.schemas import HybridScore, SearchHit
 
 if TYPE_CHECKING:
     from transport_law.knowledge import KnowledgeStore
+
+
+def _search_terms(question: str) -> str:
+    """车道处罚提问兼查一般通行罚则；新增词只用于召回，不作为用户陈述。"""
+    q = normalize(question)
+    # “汽车占用非机动车道”里的车道名称不能用来推断驾驶人所骑的车辆。
+    subject = q.replace("非机动车道", "").replace("自行车道", "")
+    cycling = any(word in subject for word in ("非机动车", "自行车", "单车")) or (
+        "骑" in subject and any(word in subject for word in ("电动车", "电瓶车"))
+    )
+    if (
+        cycling
+        and any(word in q for word in ("车道", "穿行", "借道"))
+        and any(word in q for word in ("罚", "怎么处理", "如何处理", "怎么判", "裁量"))
+    ):
+        return question + " 非机动车驾驶人 道路通行规定 警告 罚款"
+    return question
 
 
 def reciprocal_rank_fusion(
@@ -87,13 +104,14 @@ class HybridRetriever:
         if not chunks:
             return []
         limit = self.settings.hybrid_candidate_k
+        query = _search_terms(question)
 
         def dense():
-            vector = self.embedder.embed_query(question)
+            vector = self.embedder.embed_query(query)
             return self.knowledge.rank_vectors(chunks, limit=limit, query_vector=vector)
 
         return fuse_rankers(
-            lambda: bm25.rank_candidates(question, chunks, limit=limit),
+            lambda: bm25.rank_candidates(query, chunks, limit=limit),
             dense,
             top_k=top_k,
             rrf_k=self.settings.hybrid_rrf_k,

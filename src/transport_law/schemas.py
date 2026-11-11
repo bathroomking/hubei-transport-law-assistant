@@ -1,6 +1,6 @@
 import re
 from datetime import date
-from typing import Annotated, Literal
+from typing import Annotated, Literal, NamedTuple
 
 from pydantic import (
     BaseModel,
@@ -141,10 +141,18 @@ class HybridScore(Model):
     dense_score: float | None = None
 
 
+class ArticleRelation(NamedTuple):
+    source_id: str
+    target_id: str
+    kind: Literal["highway_penalty", "violation_basis", "penalty_basis", "prior_seizure"]
+    evidence: str  # source_id 的原文，可随片段的页码和 locator 回查。
+
+
 class SearchHit(Model):
     chunk: LegalChunk
     score: float
     retrieval: HybridScore | None = None
+    article_relation: ArticleRelation | None = None
 
 
 class Claim(Model):

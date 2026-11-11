@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     chat_context_token_limit: int = Field(default=24000, ge=8000, le=64000)
     hybrid_candidate_k: int = Field(default=50, ge=10, le=200)
     hybrid_rrf_k: int = Field(default=60, ge=1, le=1000)
+    article_relations_enabled: bool = True
     dashscope_api_key: SecretStr = SecretStr("")
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
     embedding_model: Literal["text-embedding-v4"] = "text-embedding-v4"

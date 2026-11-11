@@ -21,6 +21,7 @@ def settings(monkeypatch, tmp_path):
         "RETRIEVAL_TOP_K",
         "HYBRID_CANDIDATE_K",
         "HYBRID_RRF_K",
+        "ARTICLE_RELATIONS_ENABLED",
         "DASHSCOPE_API_KEY",
         "DASHSCOPE_BASE_URL",
         "EMBEDDING_MODEL",

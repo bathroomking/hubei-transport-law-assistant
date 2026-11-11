@@ -69,7 +69,7 @@ class DraftChunk(Model):
     review_status: Literal["needs_review"] = "needs_review"
 
 
-def _number(value: str) -> int:
+def legal_number(value: str) -> int:
     if value.isdecimal():
         return int(value)
     digits = dict(zip("零一二三四五六七八九", range(10), strict=True)) | {"〇": 0, "两": 2}
@@ -188,7 +188,7 @@ def _legal_units(lines: list[_Line]) -> list[_Unit]:
                 continue
             mode = "body"
 
-        if article and (number := _number(article.group(2))):
+        if article and (number := legal_number(article.group(2))):
             current = _Unit("article", re.sub(r"\s+", "", article.group(1)), number, [])
             units.append(current)
         elif item:

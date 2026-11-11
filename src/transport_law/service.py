@@ -95,6 +95,7 @@ class LawService:
                 ),
             )
         source_documents = [hit.chunk for hit in hits]
+        relation = next((hit.article_relation for hit in hits if hit.article_relation), None)
 
         def messages():
             return build_qa_messages(
@@ -103,6 +104,7 @@ class LawService:
                 prepared.state,
                 retrieval_query=prepared.query,
                 user_statements=prepared.user_statements,
+                article_relation=relation,
             )
 
         def fits_budget():

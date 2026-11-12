@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 from transport_law.config import Settings
 from transport_law.embeddings import DashScopeEmbeddings, Embeddings
-from transport_law.relations import agency_search_terms, expand_article_hits
 from transport_law.repository import ChunkRepository
 from transport_law.retrieval import BM25Retriever, normalize
 from transport_law.schemas import HybridScore, SearchHit
@@ -98,10 +97,7 @@ class HybridRetriever:
         if not 1 <= top_k <= 10:
             raise ValueError("top_k 必须在 1 到 10 之间")
         # 同一次检索共用一份 ready 快照；上传完成后下一次请求即可检索。
-        if self.settings.article_relations_enabled:
-            chunks, relations = self.knowledge.ready_evidence()
-        else:
-            chunks, relations = self.knowledge.ready_chunks(), []
+        chunks = self.knowledge.ready_chunks()
         previous, bm25 = self._snapshot
         if chunks != previous:
             bm25 = BM25Retriever(ChunkRepository(chunks))
@@ -112,19 +108,15 @@ class HybridRetriever:
         if not chunks:
             return []
         limit = self.settings.hybrid_candidate_k
-        query = question
-        if any(edge.kind == "prior_seizure" for edge in relations):
-            query = agency_search_terms(query)
-        query = _search_terms(query)
+        query = _search_terms(question)
 
         def dense():
             vector = self.embedder.embed_query(query)
             return self.knowledge.rank_vectors(chunks, limit=limit, query_vector=vector)
 
-        hits = fuse_rankers(
+        return fuse_rankers(
             lambda: bm25.rank_candidates(query, chunks, limit=limit),
             dense,
             top_k=top_k,
             rrf_k=self.settings.hybrid_rrf_k,
         )
-        return expand_article_hits(question, hits, bm25.by_id, relations, top_k)

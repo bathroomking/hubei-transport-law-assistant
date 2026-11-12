@@ -187,16 +187,23 @@ def test_offline_rescore_changes_only_existing_answer(tmp_path):
 
 
 @pytest.mark.parametrize("kind,label", [("true_false", "判断题"), ("single_choice", "单选题")])
-def test_single_selection_instruction_excludes_key(kind, label, tmp_path):
+def test_single_selection_request_is_independent_of_key(kind, label, tmp_path):
     case = {**make_case(1), "type": kind}
+    other_key = {**case, "id": "2", "expected": "A", "explanation": "另一份评分说明"}
+    requests = []
 
     def handler(request):
-        q = json.loads(request.content)["question"]
-        assert label in q and "只能选择一个选项" in q and "全部选项字母" not in q
-        assert "答案为 B" not in q and "答案为 X" in q
+        requests.append(json.loads(request.content))
         return httpx.Response(200, json={"status": "answered", "answer": "答案为 B。"})
 
-    assert run_eval([case], tmp_path / "out", handler)["correct"] == 1
+    result = run_eval([case, other_key], tmp_path / "out", handler)
+    first, second = requests
+    assert first == second
+    assert set(first) == {"question"}
+    question = first["question"]
+    assert label in question and "只能选择一个选项" in question and "全部选项字母" not in question
+    assert "答案为 B" not in question and "答案为 X" in question
+    assert result["correct"] == result["wrong"] == 1
 
 
 def test_item_errors_do_not_halt_other_questions(tmp_path):

@@ -56,12 +56,6 @@ class SnapshotStore:
         self.reads += 1
         return list(self.chunks)
 
-    def ready_evidence(self):
-        from transport_law.relations import build_article_relations
-
-        chunks = self.ready_chunks()
-        return chunks, build_article_relations(chunks)
-
     def rank_vectors(self, chunks, *, limit, query_vector):
         assert query_vector == [1.0, 0.0]
         self.calls.append(([c.id for c in chunks], limit))

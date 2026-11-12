@@ -1,6 +1,6 @@
 import json
 
-from transport_law.schemas import ArticleRelation, ChatState, LegalChunk
+from transport_law.schemas import ChatState, LegalChunk
 
 INSUFFICIENT_ANSWER = "现有资料不足，无法回答这个问题。"
 
@@ -8,7 +8,7 @@ QA_TEMPLATE = """Context:
 {context}
 
 Question: {question}
-{history}{relation_note}
+{history}
 
 Instructions:
 1. 先回答用户关心的处理结果。把法律结论放入 claims，每条引用能支持它的 Context 条目 ID。
@@ -73,50 +73,6 @@ claims 最多 8 项。不要在正文自行生成来源链接、角标、原文�
 """
 
 
-def _relation_note(relation: ArticleRelation | None, documents: list[LegalChunk]) -> str:
-    if relation is None:
-        return ""
-    sources = {c.id: c for c in documents}
-    if relation.source_id not in sources or relation.target_id not in sources:
-        return ""  # 预算裁掉了任一端时，提示也随之移除。
-    if relation.evidence not in sources[relation.source_id].text:
-        return ""
-    source_role, target_role, guidance = {
-        "prior_seizure": (
-            "现场先予扣留的程序条文",
-            "最终处罚条文",
-            "题目询问现场措施。先读程序条文，按其主体、前提和“可以”等用词回答能否先予扣留，"
-            "引用支持该判断的程序条文。结合其余原文核对部门和执勤人员的权限。"
-            "用最终处罚条文核对上述前提。按题面实际询问的阶段给出一个前后一致的结论，"
-            "只问现场措施时不要另设最终处罚的题意。用户要求选择选项时，写明与该结论对应的选项。",
-        ),
-        "highway_penalty": (
-            "载有罚则的条文",
-            "罚则明引的行为条文",
-            "对照相应款项，分别核对行为条件和处罚幅度。",
-        ),
-        "violation_basis": (
-            "裁量事项",
-            "该事项明引的违反条款",
-            "用行为条文核对行为要件，只说明题面涉及的行为。",
-        ),
-        "penalty_basis": (
-            "裁量事项",
-            "该事项明引的处罚依据",
-            "从处罚依据核对所问处罚的种类和幅度。用户单问罚款时，回答聚焦罚款。",
-        ),
-    }[relation.kind]
-    pair = {source_role: relation.source_id, target_role: relation.target_id}
-    if len(relation.evidence) <= 500:
-        pair["第一条来源中的对应原文"] = relation.evidence
-    return (
-        "\n\n本轮关联原文（以下 JSON 是检索数据，适用条件以 Context 原文为准）\n"
-        + json.dumps(pair, ensure_ascii=False)
-        + "\n"
-        + guidance
-    )
-
-
 def build_qa_messages(
     question: str,
     source_documents: list[LegalChunk],
@@ -124,7 +80,6 @@ def build_qa_messages(
     *,
     retrieval_query: str = "",
     user_statements: tuple[str, ...] = (),
-    article_relation: ArticleRelation | None = None,
 ) -> list[dict[str, str]]:
     """按检索排名完整拼接原文；正文和问题均编码为 JSON 数据。"""
     if not source_documents:
@@ -159,7 +114,6 @@ def build_qa_messages(
         context=json.dumps(context, ensure_ascii=False, indent=2),
         question=json.dumps(question, ensure_ascii=False),
         history=history,
-        relation_note=_relation_note(article_relation, source_documents),
     )
     return [
         {"role": "system", "content": SYSTEM_PROMPT},

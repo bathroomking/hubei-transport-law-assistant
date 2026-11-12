@@ -18,8 +18,7 @@ from typing import TYPE_CHECKING, BinaryIO
 from transport_law.config import Settings
 from transport_law.embeddings import DashScopeEmbeddings, Embeddings
 from transport_law.errors import AppError
-from transport_law.relations import build_article_relations
-from transport_law.schemas import ArticleRelation, LegalChunk, SearchHit, Source
+from transport_law.schemas import LegalChunk, SearchHit, Source
 from transport_law.vector_store import check_contract, chroma_client, chroma_errors, digest
 
 if TYPE_CHECKING:
@@ -121,17 +120,6 @@ class KnowledgeStore:
                     chunk_json TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS chunks_document ON chunks(document_id);
-                CREATE TABLE IF NOT EXISTS article_relations (
-                    source_id TEXT NOT NULL,
-                    target_id TEXT NOT NULL,
-                    kind TEXT NOT NULL,
-                    evidence TEXT NOT NULL,
-                    PRIMARY KEY (source_id, target_id, kind, evidence)
-                );
-                CREATE TABLE IF NOT EXISTS article_relation_state (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    snapshot TEXT NOT NULL
-                );
                 """
             )
             # 分块版本属于文档处理记录，不属于向量空间。旧集合仍可读取，旧任务须显式重解析。
@@ -692,15 +680,11 @@ class KnowledgeStore:
         if not self.database.exists():
             return []
         with self._connect() as connection:
-            return self._read_ready_chunks(connection)
-
-    @staticmethod
-    def _read_ready_chunks(connection) -> list[LegalChunk]:
-        rows = connection.execute(
-            "SELECT d.id, d.chunk_count, c.chunk_json FROM documents d "
-            "LEFT JOIN chunks c ON c.document_id = d.id "
-            "WHERE d.status = 'ready' ORDER BY c.id"
-        ).fetchall()
+            rows = connection.execute(
+                "SELECT d.id, d.chunk_count, c.chunk_json FROM documents d "
+                "LEFT JOIN chunks c ON c.document_id = d.id "
+                "WHERE d.status = 'ready' ORDER BY c.id"
+            ).fetchall()
         chunks = [
             LegalChunk.model_validate_json(row["chunk_json"])
             for row in rows
@@ -710,50 +694,6 @@ class KnowledgeStore:
         if Counter(chunk.document_id for chunk in chunks) != expected:
             raise AppError("vector_index_incomplete", "上传资料正文缺失，请检查本地索引。", 503)
         return chunks
-
-    def ready_evidence(self) -> tuple[list[LegalChunk], list[ArticleRelation]]:
-        """在同一事务内读取原文及其关系。旧库和新的 ready 文档均可按需构图。"""
-        if not self.database.exists():
-            return [], []
-        with self._connect() as connection:
-
-            def graph_state():
-                # 每次重解析会分配新的 cache_key；只对已完成入库的文档解析跨文档引用。
-                rows = connection.execute(
-                    "SELECT id, cache_key, sha256, chunk_count, updated_at FROM documents "
-                    "WHERE status = 'ready' ORDER BY id"
-                )
-                key = digest(["article-relations-v2", [tuple(row) for row in rows]])
-                current = connection.execute(
-                    "SELECT 1 FROM article_relation_state WHERE id = 1 AND snapshot = ?", (key,)
-                ).fetchone()
-                return key, bool(current)
-
-            connection.execute("BEGIN")
-            key, current = graph_state()
-            if not current:
-                # 不升级读锁。并发上传或另一个建图请求可能已提交，拿到写锁后重新取快照。
-                connection.rollback()
-                connection.execute("BEGIN IMMEDIATE")
-                key, current = graph_state()
-            chunks = self._read_ready_chunks(connection)
-            if current:
-                rows = connection.execute(
-                    "SELECT source_id, target_id, kind, evidence FROM article_relations "
-                    "ORDER BY source_id, target_id, kind, evidence"
-                )
-                return chunks, [ArticleRelation(*row) for row in rows]
-            relations = build_article_relations(chunks)
-            connection.execute("DELETE FROM article_relations")
-            connection.executemany(
-                "INSERT INTO article_relations (source_id, target_id, kind, evidence) "
-                "VALUES (?, ?, ?, ?)",
-                relations,
-            )
-            connection.execute(
-                "INSERT OR REPLACE INTO article_relation_state (id, snapshot) VALUES (1, ?)", (key,)
-            )
-            return chunks, relations
 
     def rank_vectors(
         self,

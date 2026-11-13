@@ -28,10 +28,19 @@ def parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--reload", action="store_true")
+    commands.add_parser("graph-build", help="对当前已入库资料完整建图，并为后续上传启用自动建图")
+    commands.add_parser("graph-status", help="查询当前图索引，不调用模型")
     return root
 
 
 def run(args) -> int:
+    if args.command in {"graph-build", "graph-status"}:
+        from transport_law.knowledge import KnowledgeStore
+
+        jobs = KnowledgeStore(Settings()).graph
+        status = jobs.build() if args.command == "graph-build" else jobs.status()
+        print_json(status)
+        return int(args.command == "graph-build" and status["status"] not in {"ready", "empty"})
     if args.command == "serve":
         import uvicorn
 

@@ -19,6 +19,20 @@ class DocumentStatus(BaseModel):
     pipeline_version: str = "pdf_legal_recursive_v1:800:120"
 
 
+@router.get("/graph")
+def graph_status(request: Request):
+    """查看当前 ready 文档快照的建图状态。"""
+    return request.app.state.runtime.knowledge.graph.status()
+
+
+@router.post("/graph/retry", status_code=202)
+def retry_graph(request: Request):
+    """重试已启用的图索引；原文与现有向量无需重新上传。"""
+    graph = request.app.state.runtime.knowledge.graph
+    graph.wake(retry=True)
+    return graph.status()
+
+
 @router.post("/documents", response_model=DocumentStatus, status_code=202)
 def upload_document(file: UploadFile, request: Request, background_tasks: BackgroundTasks):
     """上传 PDF。同名返回 409；202 只表示接收成功。

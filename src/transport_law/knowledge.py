@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, BinaryIO
 from transport_law.config import Settings
 from transport_law.embeddings import DashScopeEmbeddings, Embeddings
 from transport_law.errors import AppError
+from transport_law.graph_jobs import GraphJobs
 from transport_law.schemas import LegalChunk, SearchHit, Source
 from transport_law.vector_store import check_contract, chroma_client, chroma_errors, digest
 
@@ -75,6 +76,7 @@ class KnowledgeStore:
         self.path = settings.knowledge_path
         self.database = self.path / "uploads.sqlite3"
         self.embedder = embedder or DashScopeEmbeddings(settings)
+        self.graph = GraphJobs(self)
 
     @property
     def contract(self) -> dict:
@@ -147,7 +149,7 @@ class KnowledgeStore:
             connection.close()
 
     @contextmanager
-    def _lock(self, name: str, *, blocking: bool = False):
+    def _lock(self, name: str, *, blocking: bool = False, shared: bool = False):
         try:
             import fcntl
         except ImportError as exc:
@@ -158,11 +160,12 @@ class KnowledgeStore:
         folder.mkdir(parents=True, exist_ok=True)
         with (folder / (name + ".lock")).open("a") as stream:
             try:
-                fcntl.flock(stream, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+                mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+                fcntl.flock(stream, mode | (0 if blocking else fcntl.LOCK_NB))
             except BlockingIOError as exc:
                 raise AppError("upload_busy", "该文档正在处理中，请稍后查看进度。", 409) from exc
             try:
-                yield
+                yield stream.fileno()
             finally:
                 fcntl.flock(stream, fcntl.LOCK_UN)
 
@@ -624,6 +627,11 @@ class KnowledgeStore:
         except AppError as exc:
             if exc.code != "upload_busy":
                 raise
+        self.graph.wake()
+
+    def graph_artifacts(self, chunks: list[LegalChunk]):
+        """调用方在上下文内读取对应本次检索快照的已发布产物。"""
+        return self.graph.artifacts(chunks)
 
     def _embed_chunks(self, ident: str, chunks: list[LegalChunk]) -> None:
         with chroma_errors():

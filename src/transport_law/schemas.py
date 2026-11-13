@@ -131,14 +131,16 @@ class SearchRequest(Model):
 
 
 class HybridScore(Model):
-    """两路候选列表中的片段排名；RRF 分数不是相关概率。"""
+    """各路候选列表中的片段排名；RRF 分数不是相关概率。"""
 
     method: Literal["rrf"] = "rrf"
     rrf_k: int = Field(ge=1)
     bm25_rank: int | None = Field(default=None, ge=1)
     dense_rank: int | None = Field(default=None, ge=1)
+    graph_rank: int | None = Field(default=None, ge=1)
     bm25_score: float | None = None
     dense_score: float | None = None
+    graph_score: float | None = None
 
 
 class SearchHit(Model):

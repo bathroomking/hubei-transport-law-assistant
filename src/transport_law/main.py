@@ -29,6 +29,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.runtime = build_runtime(settings, llm, retriever=retriever)
+        app.state.runtime.knowledge.graph.wake()
         yield
 
     app = FastAPI(
@@ -71,8 +72,8 @@ def create_app(
             "llm_configured": runtime.settings.llm_configured,
             "llm_model": runtime.settings.deepseek_model,
             "llm_connectivity": "not_checked",
-            "retrieval_backend": "hybrid",
-            "knowledge_retrieval_backend": "hybrid",
+            "retrieval_backend": runtime.settings.retrieval_mode,
+            "knowledge_retrieval_backend": runtime.settings.retrieval_mode,
             "embedding_configured": runtime.settings.embedding_configured,
             "embedding_model": runtime.settings.embedding_model,
             "embedding_connectivity": "not_checked",

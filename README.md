@@ -76,6 +76,23 @@ python -m transport_law serve --reload
 
 问答按检索到的条文说明法律义务、处罚和裁量条件，并给出可点击的原文引用。对骑行车道处罚问题，检索同时考虑道路通行的一般罚则。助手还可以在“实务提示”中用通俗例子说明行为差别，提示现场可核对哪些事实。这些说明与法条引用分开展示。上传资料的法律效力和个案适用性仍需核验。
 
+### 使用微软标准 GraphRAG
+
+图索引从已入库的法规原文提取实体和关系。建图使用 DeepSeek 和百炼的现有配置，实体、社区报告和向量均存放于本机。每条检索结果仍引用上传的原文片段。建图会向两家模型服务发送建图和向量化所需的文本，按调用量计费。
+
+在项目根目录使用独立的 Python 3.12 环境安装微软包，然后用应用环境管理建图：
+
+```bash
+python3.12 -m venv data/local/graphrag/venv
+data/local/graphrag/venv/bin/python -m pip install 'graphrag==3.3.0'
+.venv/bin/python -m transport_law graph-build
+.venv/bin/python -m transport_law graph-status
+```
+
+首次运行 `graph-build` 会为这个本地知识库启用自动建图。后续上传或重新解析的文档完成入库后，后台任务会刷新索引并复用模型调用缓存。构建成功后一次发布整份索引。可用 `GET /api/v1/knowledge/graph` 查看状态，失败后可用 `POST /api/v1/knowledge/graph/retry` 重试。不同环境可指定 `GRAPHRAG_PYTHON`。
+
+默认 `RETRIEVAL_MODE=hybrid` 使用 BM25 和向量。图就绪后，可改成 `hybrid_graph`（BM25、向量和图）或 `dense_graph`（向量和图）并重启服务。在图模式下，问答利用实体和最多两步关系来排序原文，沿用相同的证据条数和回答提示。它使用微软的标准索引产物，查询端复用了本项目的检索与引用流程。索引与资料快照不一致时，图模式会报告暂不可用。
+
 ### 5. 提问
 
 在网页输入问题，或通过命令行提问：

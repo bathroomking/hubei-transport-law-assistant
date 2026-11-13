@@ -1,13 +1,16 @@
-"""对已完成入库的上传片段执行 BM25、向量排名和 RRF 融合。"""
+"""对已完成入库的上传片段融合配置启用的各路排名。"""
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import TYPE_CHECKING
 
 from transport_law.config import Settings
 from transport_law.embeddings import DashScopeEmbeddings, Embeddings
+from transport_law.errors import AppError
+from transport_law.graph_retrieval import load_graph
 from transport_law.repository import ChunkRepository
-from transport_law.retrieval import BM25Retriever, normalize
+from transport_law.retrieval import BM25Retriever, explicit_chunks, normalize
 from transport_law.schemas import HybridScore, SearchHit
 
 if TYPE_CHECKING:
@@ -39,13 +42,14 @@ def reciprocal_rank_fusion(
     bm25_hits: list[SearchHit],
     dense_hits: list[SearchHit],
     *,
+    graph_hits: list[SearchHit] | None = None,
     top_k: int = 5,
     rrf_k: int = 60,
 ) -> list[SearchHit]:
     if not 1 <= top_k <= 10 or rrf_k < 1:
         raise ValueError("top_k 必须在 1 到 10 之间，rrf_k 必须为正整数")
     chunks, scores, details = {}, {}, {}
-    for name, hits in (("bm25", bm25_hits), ("dense", dense_hits)):
+    for name, hits in (("bm25", bm25_hits), ("dense", dense_hits), ("graph", graph_hits or [])):
         seen = set()
         for hit in hits:
             ident = hit.chunk.id
@@ -66,18 +70,24 @@ def reciprocal_rank_fusion(
 
 
 def fuse_rankers(
-    sparse: Callable[[], list[SearchHit]],
+    sparse: Callable[[], list[SearchHit]] | None,
     dense: Callable[[], list[SearchHit]],
     *,
+    graph: Callable[[list[SearchHit]], list[SearchHit]] | None = None,
     top_k: int,
     rrf_k: int,
 ) -> list[SearchHit]:
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="hybrid-retrieval") as pool:
-        sparse_result = pool.submit(sparse)
-        dense_result = pool.submit(dense)
+        sparse_result = pool.submit(sparse) if sparse else None
+        dense_hits = dense()
+        graph_hits = graph(dense_hits) if graph else None
         # 任一路失败向调用方报错，不把单路结果伪装成已完成的融合。
         return reciprocal_rank_fusion(
-            sparse_result.result(), dense_result.result(), top_k=top_k, rrf_k=rrf_k
+            sparse_result.result() if sparse_result else [],
+            dense_hits,
+            graph_hits=graph_hits,
+            top_k=top_k,
+            rrf_k=rrf_k,
         )
 
 
@@ -91,32 +101,47 @@ class HybridRetriever:
         self.knowledge = knowledge
         self.settings = settings
         self.embedder = embedder or DashScopeEmbeddings(settings)
-        self._snapshot = ([], BM25Retriever(ChunkRepository([])))
+        self._snapshot = ([], None)
 
     def search(self, question: str, top_k: int = 5) -> list[SearchHit]:
         if not 1 <= top_k <= 10:
             raise ValueError("top_k 必须在 1 到 10 之间")
         # 同一次检索共用一份 ready 快照；上传完成后下一次请求即可检索。
         chunks = self.knowledge.ready_chunks()
-        previous, bm25 = self._snapshot
-        if chunks != previous:
-            bm25 = BM25Retriever(ChunkRepository(chunks))
-            self._snapshot = (chunks, bm25)
-        explicit = bm25.explicit_chunks(question)
+        explicit = explicit_chunks(question, chunks)
         if explicit:
             return [SearchHit(chunk=chunk, score=1000) for chunk in explicit[:top_k]]
         if not chunks:
             return []
         limit = self.settings.hybrid_candidate_k
         query = _search_terms(question)
+        mode = self.settings.retrieval_mode
+        sparse = None
+        if mode != "dense_graph":
+            previous, bm25 = self._snapshot
+            if bm25 is None or chunks != previous:
+                bm25 = BM25Retriever(ChunkRepository(chunks))
+                self._snapshot = (chunks, bm25)
+            sparse = partial(bm25.rank_candidates, query, chunks, limit=limit)
+
+        graph_ranker = None
+        if mode != "hybrid":
+            with self.knowledge.graph_artifacts(chunks) as paths:
+                if len(paths) != 1:
+                    raise AppError("graph_index_unavailable", "尚无完整的知识图谱。", 503)
+                graph = load_graph(paths[0])
+            graph_ranker = partial(
+                graph.rank, question, by_id={c.id: c for c in chunks}, limit=limit, seed_count=top_k
+            )
 
         def dense():
             vector = self.embedder.embed_query(query)
             return self.knowledge.rank_vectors(chunks, limit=limit, query_vector=vector)
 
         return fuse_rankers(
-            lambda: bm25.rank_candidates(query, chunks, limit=limit),
+            sparse,
             dense,
+            graph=graph_ranker,
             top_k=top_k,
             rrf_k=self.settings.hybrid_rrf_k,
         )

@@ -107,7 +107,7 @@ def test_upload_is_visible_to_same_runtime_and_citations_without_restart(online_
             client.post("/api/v1/ask", json={"question": "施工许可"}).json()["status"]
             == "insufficient_evidence"
         )
-        assert builds == [0]
+        assert builds == []
         response = client.post(
             "/api/v1/knowledge/documents",
             files={
@@ -127,11 +127,11 @@ def test_upload_is_visible_to_same_runtime_and_citations_without_restart(online_
         assert len(answer["source_documents"]) == len(answer["sources"]) == 2
         assert {c["document_id"] for c in answer["sources"]} == {ident}
         assert embedder.queries == [question]
-        assert builds == [0, 2]
+        assert builds == [2]
         batches = len(embedder.calls)
         again = client.post("/api/v1/ask", json={"question": question}).json()
         assert again["sources"] == answer["sources"]
-        assert builds == [0, 2] and len(embedder.calls) == batches
+        assert builds == [2] and len(embedder.calls) == batches
         assert embedder.queries == [question, question]
         for source in answer["sources"]:
             assert client.get(f"/api/v1/articles/{source['id']}").json() == source

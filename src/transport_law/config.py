@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     chat_context_token_limit: int = Field(default=24000, ge=8000, le=64000)
     hybrid_candidate_k: int = Field(default=50, ge=10, le=200)
     hybrid_rrf_k: int = Field(default=60, ge=1, le=1000)
+    retrieval_mode: Literal["hybrid", "hybrid_graph", "dense_graph"] = "hybrid"
+    graphrag_python: Path = PROJECT_ROOT / "data/local/graphrag/venv/bin/python"
     dashscope_api_key: SecretStr = SecretStr("")
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
     embedding_model: Literal["text-embedding-v4"] = "text-embedding-v4"
@@ -78,7 +80,7 @@ class Settings(BaseSettings):
             raise ValueError("EMBEDDING_DIMENSIONS 必须是百炼 text-embedding-v4 支持的维度")
         return value
 
-    @field_validator("chroma_path", "knowledge_path")
+    @field_validator("chroma_path", "knowledge_path", "graphrag_python")
     @classmethod
     def resolve_path(cls, value: Path) -> Path:
         return value if value.is_absolute() else PROJECT_ROOT / value

@@ -33,6 +33,11 @@ class Retriever(Protocol):
     def search(self, question: str, top_k: int = 5) -> list[SearchHit]: ...
 
 
+def explicit_chunks(question: str, chunks: list[LegalChunk]) -> list[LegalChunk]:
+    normalized = normalize(question)
+    return [chunk for chunk in chunks if normalize(chunk.id) in normalized]
+
+
 class BM25Retriever:
     def __init__(self, repository: ChunkRepository):
         all_chunks = repository.searchable
@@ -44,10 +49,7 @@ class BM25Retriever:
         self.document_frequency = Counter(term for terms in self.terms for term in terms)
 
     def explicit_chunks(self, question: str) -> list[LegalChunk]:
-        normalized_question = normalize(question)
-        return [
-            chunk for ident, chunk in self.by_id.items() if normalize(ident) in normalized_question
-        ]
+        return explicit_chunks(question, self.chunks)
 
     def search(self, question: str, top_k: int = 5) -> list[SearchHit]:
         if not 1 <= top_k <= 10:

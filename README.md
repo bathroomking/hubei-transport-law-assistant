@@ -91,6 +91,8 @@ data/local/graphrag/venv/bin/python -m pip install 'graphrag==3.3.0'
 
 首次运行 `graph-build` 会为这个本地知识库启用自动建图。后续上传或重新解析的文档完成入库后，后台任务会刷新索引并复用模型调用缓存。构建成功后一次发布整份索引。可用 `GET /api/v1/knowledge/graph` 查看状态，失败后可用 `POST /api/v1/knowledge/graph/retry` 重试。不同环境可指定 `GRAPHRAG_PYTHON`。
 
+模型账户余额不足（HTTP 402）会暂停自动任务，上传接口仍可接收文档。余额恢复后运行 `graph-build` 显式重试。若资料和配置与上次相同，程序会核对检查点的文件哈希，从已完成的实体、关系和社区表继续生成报告和向量；已成功的模型调用可从本地缓存复用。请保留知识库目录下的 `graphrag/checkpoints` 和 `graphrag/cache` 以便恢复。
+
 默认 `RETRIEVAL_MODE=hybrid` 使用 BM25 和向量。图就绪后，可改成 `hybrid_graph`（BM25、向量和图）或 `dense_graph`（向量和图）并重启服务。在图模式下，问答利用实体和最多两步关系来排序原文，沿用相同的证据条数和回答提示。它使用微软的标准索引产物，查询端复用了本项目的检索与引用流程。索引与资料快照不一致时，图模式会报告暂不可用。
 
 ### 5. 提问

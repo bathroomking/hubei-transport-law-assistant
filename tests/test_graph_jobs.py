@@ -171,3 +171,57 @@ def test_worker_diagnostics_exclude_response_bodies(settings, seeded_repository,
     assert "private document" not in state and "sensitive-test-value" not in state
     assert list((store.graph.root / "staging").iterdir()) == []
     assert result["finished_at"] >= result["started_at"]
+
+
+def test_balance_failure_keeps_cache_and_requires_an_explicit_retry(
+    settings, seeded_repository, monkeypatch
+):
+    from pydantic import SecretStr
+
+    cfg = settings.model_copy(
+        update={
+            "graphrag_python": Path(sys.executable),
+            "deepseek_api_key": SecretStr("test"),
+            "dashscope_api_key": SecretStr("test"),
+        }
+    )
+    store = KnowledgeStore(cfg)
+    calls = []
+
+    def run(argv, **kwargs):
+        source = Path(argv[argv.index("--input") + 1])
+        dest = Path(argv[argv.index("--output") + 1])
+        cache = Path(argv[argv.index("--cache") + 1])
+        calls.append(source.read_bytes())
+        item = cache / "completed-batch"
+        if len(calls) == 1:
+            cache.mkdir(exist_ok=True)
+            item.write_text("preserved")
+            dest.mkdir()
+            (dest / "failure.json").write_text(
+                json.dumps({"stage": "create_community_reports", "category": "balance"})
+            )
+            return subprocess.CompletedProcess(argv, 1)
+        assert item.read_text() == "preserved"
+        write_outputs(source, dest)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    failed = store.graph.build()
+    assert failed["error_code"] == "graph_worker_balance" and "402" in failed["error_message"]
+    assert not (store.graph.root / "generations").exists()
+    chunk = store.ready_chunks()[0].model_copy(update={"text": "新快照中的原文"})
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE chunks SET chunk_json = ? WHERE id = ?", (chunk.model_dump_json(), chunk.id)
+        )
+    restarted = KnowledgeStore(cfg)
+    restarted.graph._run(retry=False)
+    status = restarted.graph.status()
+    assert status["status"] == "failed" and status["error_code"] == "graph_worker_balance"
+    assert (
+        status["attempted_snapshot"] == failed["snapshot"]
+        and status["snapshot"] != failed["snapshot"]
+    )
+    assert len(calls) == 1
+    assert restarted.graph.build()["status"] == "ready" and len(calls) == 2

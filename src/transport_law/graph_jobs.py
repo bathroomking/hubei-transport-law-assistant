@@ -40,6 +40,7 @@ _WORKFLOWS = {
     "generate_text_embeddings",
 }
 _ERROR_TYPES = {
+    "balance",
     "authentication",
     "rate_limit",
     "timeout",
@@ -106,6 +107,13 @@ class GraphJobs:
         path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         path.replace(self.root / "state.json")
 
+    @staticmethod
+    def _failed(state, snapshot) -> bool:
+        # A provider balance failure affects the account even if another PDF arrives.
+        return state.get("status") == "failed" and (
+            state.get("attempt") == snapshot or state.get("error_code") == "graph_worker_balance"
+        )
+
     def _published(self, state, fingerprint) -> Path | None:
         name = state.get("generation", "")
         if state.get("published_snapshot") != fingerprint or not re.fullmatch("[0-9a-f]{32}", name):
@@ -135,7 +143,7 @@ class GraphJobs:
             phase = "empty"
         elif self._published(state, fingerprint):
             phase = "ready"
-        elif state.get("attempt") == fingerprint and state.get("status") == "failed":
+        elif self._failed(state, fingerprint):
             phase = "failed"
         elif state.get("status") == "building":
             try:
@@ -154,13 +162,15 @@ class GraphJobs:
             "chunks": len(chunks),
             "snapshot": fingerprint,
         }
-        if state.get("attempt") == fingerprint:
+        if state.get("attempt") == fingerprint or phase == "failed":
             result.update(started_at=state.get("started_at"), finished_at=state.get("finished_at"))
         if phase == "ready":
             result["generation"] = state["generation"]
         if phase == "failed":
             result.update(
-                error_code=state.get("error_code"), error_message=state.get("error_message")
+                attempted_snapshot=state["attempt"],
+                error_code=state.get("error_code"),
+                error_message=state.get("error_message"),
             )
         return result
 
@@ -213,6 +223,13 @@ class GraphJobs:
         )
         if result.returncode:
             stage, category = _failure(destination)
+            if category == "balance":
+                raise AppError(
+                    "graph_worker_balance",
+                    f"建图阶段 {stage} 的模型账户余额不足（HTTP 402）。"
+                    "余额恢复后请重试，将复用已有缓存。",
+                    503,
+                )
             raise AppError(
                 f"graph_worker_{category}",
                 f"建图阶段 {stage} 未完成（退出码 {result.returncode}，错误类别 {category}）。",
@@ -226,11 +243,7 @@ class GraphJobs:
                 snapshot = self._snapshot(chunks)
                 if not chunks or self._published(state, snapshot):
                     return
-                if (
-                    not retry
-                    and state.get("attempt") == snapshot
-                    and state.get("status") == "failed"
-                ):
+                if not retry and self._failed(state, snapshot):
                     return
                 state.update(
                     attempt=snapshot,

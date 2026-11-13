@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import sys
 from importlib.metadata import version
@@ -13,12 +14,42 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 import lancedb
 import pandas as pd
+from graph_checkpoint import RESUME_WORKFLOWS, BuildObserver, has_extraction_error, snapshot_key
 from graphrag.api import build_index
 from graphrag.config.embeddings import default_embeddings
 from graphrag.config.models.graph_rag_config import GraphRagConfig
 from graphrag_llm.completion import register_completion
 from graphrag_llm.completion.lite_llm_completion import LiteLLMCompletion
 from pydantic import ValidationError
+
+
+class ProviderBalanceError(RuntimeError):
+    def __init__(self, stage):
+        super().__init__("模型账户余额不足")
+        self.stage = stage
+
+
+class StopOnBalance(logging.Handler):
+    """微软部分工作流会消费异常；首条真实 402 日志要取消整次流水线。"""
+
+    def __init__(self, observer):
+        super().__init__(logging.ERROR)
+        self.observer = observer
+        self.exhausted = False
+        self.loop = asyncio.get_running_loop()
+
+    def emit(self, record):
+        if self.exhausted:
+            return
+        text = record.getMessage().lower()
+        exc = record.exc_info[1] if record.exc_info else None
+        if (
+            getattr(exc, "status_code", None) == 402
+            or "insufficient_balance" in text
+            or "insufficient balance" in text
+        ):
+            self.exhausted = True
+            self.loop.call_soon_threadsafe(self.observer.task.cancel)
 
 
 class DeepSeekCompletion(LiteLLMCompletion):
@@ -181,9 +212,8 @@ def export_graph(output, expected, config):
         raise ValueError("图谱关系或实体缺少原文出处")
     # Microsoft can log an extraction exception and continue with an empty dataframe.
     # This differs from a valid unit with no mentions; the latter may still be indexed.
-    with (output / "logs" / "indexing-engine.log").open(encoding="utf-8") as log:
-        if any(" - ERROR - graphrag." in line for line in log):
-            raise RuntimeError("上游 GraphRAG 记录了部分抽取错误，不能发布该索引")
+    if has_extraction_error(output):
+        raise RuntimeError("上游 GraphRAG 记录了部分抽取错误，不能发布该索引")
     db = lancedb.connect(output / "lancedb")
     counts = {}
     for name, rows in zip(default_embeddings, (ent, reports, units), strict=True):
@@ -222,7 +252,28 @@ async def run(args):
     docs = build_documents(args.input)
     register_completion("deepseek_json", DeepSeekCompletion)
     config = make_config(output, cache, args.concurrency)
-    results = await build_index(config, input_documents=docs, method="standard")
+    key = snapshot_key(args.input, config)
+    checkpoint = cache.parent / "checkpoints" / key
+    observer = BuildObserver(output, checkpoint)
+    resumed = observer.restore()
+    if resumed:
+        config.workflows = RESUME_WORKFLOWS
+    guard = StopOnBalance(observer)
+    root_logger = logging.getLogger()
+    root_logger.addHandler(guard)
+    try:
+        results = await build_index(
+            config,
+            input_documents=None if resumed else docs,
+            callbacks=[observer],
+            method="standard",
+        )
+    except asyncio.CancelledError:
+        if guard.exhausted:
+            raise ProviderBalanceError(observer.stage) from None
+        raise
+    finally:
+        root_logger.removeHandler(guard)
     for result in results:
         if result.error is not None:
             raise RuntimeError(f"GraphRAG 工作流失败：{result.workflow}") from result.error
@@ -232,6 +283,8 @@ async def run(args):
 
 
 def _safe_failure(exc):
+    if isinstance(exc, ProviderBalanceError):
+        return {"stage": exc.stage, "category": "balance"}
     stage = "index"
     categories = {
         "AuthenticationError": "authentication",
